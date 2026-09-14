@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,27 +14,42 @@ import requests
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 from dateutil import parser as date_parser
 
+SRC_DIR = Path(__file__).resolve().parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+from sources import SOURCES, SUBGENRES
+
 ROOT = Path(__file__).resolve().parents[1]
 HISTORY_PATH = ROOT / 'data' / 'history.json'
 REPORT_PATH = ROOT / 'data' / 'latest-report.md'
 NOW = datetime.now(timezone.utc)
 LOOKBACK = NOW - timedelta(days=7)
+LOOKAHEAD = NOW + timedelta(days=14)
 ROME = ZoneInfo('Europe/Rome')
+MIN_TRACKS = 8
 MAX_TRACKS = 15
 MAX_PER_ARTIST = 2
+MAX_PER_ALBUM = 3
+CANDIDATE_POOL = 60
+MIN_SCORE = 40
+PITCHFORK_ONLY_CAP = 3
 SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token'
 SPOTIFY_API = 'https://api.spotify.com/v1'
+SEARCH_LIMIT = 5
+FEED_HEADERS = {'User-Agent': 'MetalRadar/1.0 (+https://github.com/domenicomarra79-art/metal-radar)'}
+PLAYLIST_NAME = f'METAL RADAR — {datetime.now(ROME).year}'
+PLAYLIST_DESCRIPTION = (
+    'The essential metal radar. New riffs, heavy sounds and future classics — '
+    'curated weekly from the best metal press across the US, UK, Europe and Italy. '
+    'No algorithm. No filler. Just the stuff worth hearing.'
+)
+BUCKET_QUOTAS = {'established': 6, 'emerging': 5, 'underground': 3, 'european': 1}
 
-FEEDS = {
-    'Pitchfork': ['https://pitchfork.com/feed/feed-news/rss'],
-    'Kerrang': ['https://www.kerrang.com/feed'],
-    'Metal Injection': ['https://metalinjection.net/feed'],
-    'Metalitalia': ['https://metalitalia.com/feed/'],
-    'Louder': ['https://www.loudersound.com/rss'],
-    'Revolver': ['https://www.revolvermag.com/feed'],
-}
-WEIGHTS = {'Pitchfork': 5, 'Kerrang': 5, 'Louder': 4, 'Metal Injection': 4, 'Metalitalia': 4, 'Revolver': 3}
-METAL = re.compile(r'metal|doom|thrash|deathcore|metalcore|hardcore|sludge|post-metal|black metal|death metal|heavy|riff', re.I)
+METAL = re.compile(
+    r'metal|doom|thrash|deathcore|metalcore|hardcore|sludge|stoner|post-metal|'
+    r'black metal|death metal|heavy metal|riff|grind|djent|screamo',
+    re.I,
+)
 PAIR = re.compile(r'(?P<artist>[A-Z][^—–\-:|]{1,80})\s*[—–\-:]\s*["“\']?(?P<title>[^"”\'\n|]{2,100})')
 PLAYLIST_IN_URL = re.compile(r'(/playlists/)([^/?#]+)')
 REQUIRED_PLAYLIST_SCOPES = (
@@ -41,10 +57,30 @@ REQUIRED_PLAYLIST_SCOPES = (
     'playlist-modify-private',
     'playlist-modify-public',
 )
+NOISE = re.compile(
+    r'the best|this week|metal hammer|new music friday|albums you need|tracklist|'
+    r'best metal|new metal albums|new metal releases|you need to hear|'
+    r'the post\b|appeared first|track premieres?|album review|news roundup',
+    re.I,
+)
+EDITORIAL = re.compile(
+    r'album of the week|song of the week|track of the week|premiere|exclusive|'
+    r'essential|best new|must hear|album of the month',
+    re.I,
+)
+ALBUMISH = re.compile(r'\balbum\b|\blp\b|\bfull[- ]length\b|\breview\b|\brecensione\b', re.I)
+CURRENT = re.compile(r'\b(premiere|out now|released|reissue|new single|announced)\b', re.I)
+NOSTALGIA = re.compile(r'\b(throwback|classic album|best of 19|anniversary unless)\b', re.I)
+SUBGENRE_RE = re.compile('|'.join(re.escape(name) for name in sorted(SUBGENRES, key=len, reverse=True)), re.I)
 
 
 def load():
-    return json.loads(HISTORY_PATH.read_text()) if HISTORY_PATH.exists() else {'tracks': [], 'articles': [], 'last_run': None}
+    if not HISTORY_PATH.exists():
+        return {'tracks': [], 'pairs': [], 'albums': [], 'articles': [], 'last_run': None}
+    payload = json.loads(HISTORY_PATH.read_text())
+    payload.setdefault('pairs', [])
+    payload.setdefault('albums', [])
+    return payload
 
 
 def save(value):
@@ -62,51 +98,190 @@ def published(entry):
     return NOW
 
 
+def in_window(date, text):
+    if LOOKBACK <= date <= LOOKAHEAD:
+        return True
+    if date < LOOKBACK and date >= NOW - timedelta(days=14) and CURRENT.search(text):
+        return True
+    return False
+
+
+def clean_text(entry):
+    title = entry.get('title', '') or ''
+    with catch_warnings():
+        filterwarnings('ignore', category=MarkupResemblesLocatorWarning)
+        summary = BeautifulSoup(str(entry.get('summary', '')), 'html.parser').get_text(' ')
+    return title, f'{title} {summary}'
+
+
 def articles():
     output = []
-    for source, urls in FEEDS.items():
-        for url in urls:
+    consulted = []
+    for source, config in SOURCES.items():
+        fetched = False
+        for url in config['feeds']:
             try:
-                feed = feedparser.parse(url)
+                feed = feedparser.parse(url, request_headers=FEED_HEADERS)
             except Exception as exc:
                 print(f'RSS source skipped: {source} ({type(exc).__name__})')
                 continue
-            if getattr(feed, 'bozo', False) and not getattr(feed, 'entries', None):
+            entries = getattr(feed, 'entries', None) or []
+            if getattr(feed, 'bozo', False) and not entries:
                 print(f'RSS source skipped: {source} (parse error)')
                 continue
-            for entry in getattr(feed, 'entries', []) or []:
+            fetched = True
+            for entry in entries:
                 date = published(entry)
-                title = entry.get('title', '') or ''
-                with catch_warnings():
-                    filterwarnings('ignore', category=MarkupResemblesLocatorWarning)
-                    summary = BeautifulSoup(str(entry.get('summary', '')), 'html.parser').get_text(' ')
-                text = f'{title} {summary}'
-                if date >= LOOKBACK and METAL.search(text):
-                    output.append({'source': source, 'title': title, 'link': entry.get('link', ''), 'text': text, 'published': date.isoformat()})
+                title, text = clean_text(entry)
+                if not METAL.search(text):
+                    continue
+                if NOSTALGIA.search(text) and not CURRENT.search(text):
+                    continue
+                if not in_window(date, text):
+                    continue
+                output.append({
+                    'source': source,
+                    'title': title,
+                    'link': entry.get('link', ''),
+                    'text': text,
+                    'published': date.isoformat(),
+                    'region': config['region'],
+                    'kind': config['kind'],
+                    'authority': config['authority'],
+                })
+        if fetched:
+            consulted.append(source)
     unique = {}
     for item in output:
         unique[item['link'] or item['title']] = item
-    return list(unique.values())
+    return list(unique.values()), consulted
+
+
+def detect_subgenre(text):
+    match = SUBGENRE_RE.search(text or '')
+    return match.group(0).lower() if match else 'metal'
+
+
+def is_album(text, title):
+    return bool(ALBUMISH.search(text) or ALBUMISH.search(title))
+
+
+def source_bucket(sources, regions, kinds):
+    if regions <= {'IT', 'EU'} and 'editorial' not in kinds:
+        return 'european'
+    if kinds <= {'specialist', 'wire'} or (len(sources) == 1 and 'specialist' in kinds):
+        return 'underground'
+    if len(sources) >= 3 or 'Pitchfork' in sources and len(sources) >= 2:
+        return 'established'
+    if 'Pitchfork' in sources or 'Kerrang' in sources or 'Louder' in sources:
+        return 'established' if len(sources) >= 2 else 'emerging'
+    return 'emerging'
+
+
+def consensus_bonus(source_count, kinds):
+    if source_count >= 3:
+        return 15
+    if source_count == 2:
+        return 10
+    if 'editorial' in kinds:
+        return 5
+    if 'specialist' in kinds:
+        return 3
+    return 0
+
+
+def score_candidate(item):
+    sources = item['sources']
+    kinds = item['kinds']
+    authority = max(item['authorities'] or [5])
+    quality = min(30, 12 + authority * 2 + (8 if item['editorial'] else 0))
+    originality = 20 if item['bucket'] in {'underground', 'european'} else 12 if item['bucket'] == 'emerging' else 8
+    critical = min(15, 5 * max(0, len(sources) - 1) + (5 if item['editorial'] else 0))
+    relevance = 10 if item['recent'] else 6
+    metal_cred = 10 if item['subgenre'] != 'metal' else 7
+    discovery = 10 if item['bucket'] in {'underground', 'european', 'emerging'} else 4
+    diversity = 5
+    total = quality + originality + critical + relevance + metal_cred + discovery + diversity
+    total = min(100, total + consensus_bonus(len(sources), kinds))
+    if 'Pitchfork' in sources and len(sources) == 1:
+        total = min(total, 72)
+    return total, {
+        'quality': quality,
+        'originality': originality,
+        'critical_consensus': critical,
+        'relevance': relevance,
+        'metal_credibility': metal_cred,
+        'discovery_value': discovery,
+        'diversity': diversity,
+    }
+
+
+def valid_pair(artist, title):
+    artist = re.sub(r'\s+', ' ', artist).strip(' .,:"\'')
+    title = re.sub(r'\s+', ' ', title).strip(' .,:"\'')
+    artist = re.sub(r'^(review|interview|news|album)\s*\]\s*', '', artist, flags=re.I)
+    if len(artist) < 2 or len(title) < 2 or len(artist) > 50 or len(title) > 70:
+        return None
+    if len(artist.split()) > 5:
+        return None
+    if NOISE.search(artist) or NOISE.search(title):
+        return None
+    if re.search(r'\b(announces|interview|festival|\bfest\b|pre-?order|vinyl variant|dettagli dell)\b', artist, re.I):
+        return None
+    if re.search(r'\b(tour|concerto|biglietti|carroponte|intervista)\b|\b202[7-9]\b', title, re.I):
+        return None
+    if not re.search(r'[A-Za-zÀ-ÿ]', artist) or not re.search(r'[A-Za-zÀ-ÿ]', title):
+        return None
+    return artist, title
 
 
 def candidates(items):
     grouped = {}
     for article in items:
-        for match in PAIR.finditer(article['text']):
-            artist = re.sub(r'\s+', ' ', match.group('artist')).strip(' .,')
-            title = re.sub(r'\s+', ' ', match.group('title')).strip(' .,')
-            if len(artist) < 2 or len(title) < 2:
-                continue
-            if any(x in artist.lower() for x in ('the best', 'this week', 'metal hammer')):
-                continue
-            key = (artist.lower(), title.lower())
-            if key not in grouped:
-                grouped[key] = {'artist': artist, 'title': title, 'score': 0, 'sources': set(), 'article': article['link']}
-            grouped[key]['score'] += WEIGHTS.get(article['source'], 1)
-            grouped[key]['sources'].add(article['source'])
+        blobs = [article['title'], article['text'][:400]]
+        for blob in blobs:
+            for match in PAIR.finditer(blob):
+                parsed = valid_pair(match.group('artist'), match.group('title'))
+                if not parsed:
+                    continue
+                artist, title = parsed
+                key = (artist.lower(), title.lower())
+                if key not in grouped:
+                    grouped[key] = {
+                        'artist': artist,
+                        'title': title,
+                        'album': title if is_album(article['text'], article['title']) else '',
+                        'kind': 'album' if is_album(article['text'], article['title']) else 'track',
+                        'sources': set(),
+                        'source_urls': [],
+                        'kinds': set(),
+                        'regions': set(),
+                        'authorities': [],
+                        'editorial': False,
+                        'recent': False,
+                        'subgenre': detect_subgenre(article['text']),
+                        'summary': article['title'],
+                    }
+                grouped[key]['sources'].add(article['source'])
+                if article['link']:
+                    grouped[key]['source_urls'].append(article['link'])
+                grouped[key]['kinds'].add(article['kind'])
+                grouped[key]['regions'].add(article['region'])
+                grouped[key]['authorities'].append(article['authority'])
+                grouped[key]['editorial'] = grouped[key]['editorial'] or bool(EDITORIAL.search(article['text']))
+                published_at = date_parser.parse(article['published'])
+                grouped[key]['recent'] = grouped[key]['recent'] or published_at >= LOOKBACK
+                if is_album(article['text'], article['title']):
+                    grouped[key]['kind'] = 'album'
+                    grouped[key]['album'] = grouped[key]['album'] or title
+    ranked = []
     for item in grouped.values():
-        item['score'] += max(0, len(item['sources']) - 1) * 3
-    return sorted(grouped.values(), key=lambda item: item['score'], reverse=True)
+        item['bucket'] = source_bucket(item['sources'], item['regions'], item['kinds'])
+        item['score'], item['source_scores'] = score_candidate(item)
+        item['source_publications'] = sorted(item['sources'])
+        ranked.append(item)
+    ranked.sort(key=lambda item: item['score'], reverse=True)
+    return ranked[:CANDIDATE_POOL]
 
 
 def diagnostic_mode():
@@ -254,21 +429,71 @@ def diagnose_spotify(access, playlist, granted_scope):
         raise _spotify_error('playlist items', items_response)
 
 
-def search(access, artist, title):
+def _search(access, query, kind):
     response = requests.get(
         f'{SPOTIFY_API}/search',
         headers=_auth_headers(access),
-        params={'q': f'track:{title} artist:{artist}', 'type': 'track', 'market': 'IT', 'limit': 5},
+        params={'q': query, 'type': kind, 'market': 'IT', 'limit': SEARCH_LIMIT},
         timeout=30,
     )
     if not response.ok:
         raise _spotify_error('search', response)
-    tracks = response.json().get('tracks', {}).get('items', [])
+    return response.json()
+
+
+def search(access, artist, title):
+    payload = _search(access, f'track:{title} artist:{artist}', 'track')
+    tracks = payload.get('tracks', {}).get('items', [])
     for track in tracks:
         names = ' '.join(a['name'] for a in track.get('artists', []))
         if artist.lower() in names.lower() and title.lower() in track['name'].lower():
             return track
     return tracks[0] if tracks else None
+
+
+def album_tracks(access, artist, title):
+    payload = _search(access, f'album:{title} artist:{artist}', 'album')
+    albums = payload.get('albums', {}).get('items', []) or []
+    album = None
+    for item in albums:
+        names = ' '.join(a['name'] for a in item.get('artists', []))
+        if artist.lower() in names.lower() and title.lower() in (item.get('name') or '').lower():
+            album = item
+            break
+    album = album or (albums[0] if albums else None)
+    if not album or not album.get('id'):
+        return []
+    response = requests.get(
+        f'{SPOTIFY_API}/albums/{album["id"]}/tracks',
+        headers=_auth_headers(access),
+        params={'limit': 10, 'market': 'IT'},
+        timeout=30,
+    )
+    if not response.ok:
+        _log_spotify_call('album tracks', 'GET', f'{SPOTIFY_API}/albums/{album["id"]}/tracks', response)
+        fallback = search(access, artist, title)
+        return [fallback] if fallback else []
+    tracks = []
+    for item in response.json().get('items') or []:
+        if not item or not item.get('id'):
+            continue
+        item = dict(item)
+        item['album'] = {'name': album.get('name', title), 'id': album.get('id')}
+        if not item.get('artists'):
+            item['artists'] = album.get('artists') or [{'name': artist}]
+        tracks.append(item)
+        if len(tracks) >= MAX_PER_ALBUM:
+            break
+    return tracks
+
+
+def resolve_candidate(access, candidate):
+    if candidate.get('kind') == 'album':
+        tracks = album_tracks(access, candidate['artist'], candidate.get('album') or candidate['title'])
+        if tracks:
+            return tracks
+    track = search(access, candidate['artist'], candidate['title'])
+    return [track] if track else []
 
 
 def existing(access, playlist):
@@ -307,6 +532,18 @@ def add(access, playlist, uris):
         raise _spotify_error('playlist add', response)
 
 
+def update_playlist_profile(access, playlist):
+    url = f'{SPOTIFY_API}/playlists/{playlist}'
+    response = requests.put(
+        url,
+        headers={**_auth_headers(access), 'Content-Type': 'application/json'},
+        json={'name': PLAYLIST_NAME, 'description': PLAYLIST_DESCRIPTION},
+        timeout=30,
+    )
+    if not response.ok:
+        _log_spotify_call('playlist profile', 'PUT', url, response)
+
+
 def playlist_entry(item):
     if not isinstance(item, dict):
         return None
@@ -326,48 +563,177 @@ def playlist_ids(items):
     return ids
 
 
-def select_tracks(ranked, known_ids, lookup):
+def pair_key(artist, title):
+    return (str(artist or '').strip().lower(), str(title or '').strip().lower())
+
+
+def catalog_from_items(items, history):
+    ids = set(history.get('tracks') or []) | playlist_ids(items)
+    pairs = {tuple(part.split('|', 1)) for part in history.get('pairs') or [] if '|' in part}
+    albums = {tuple(part.split('|', 1)) for part in history.get('albums') or [] if '|' in part}
+    for item in items:
+        entry = playlist_entry(item)
+        if not entry:
+            continue
+        artist = ((entry.get('artists') or [{}])[0].get('name') or '')
+        title = entry.get('name') or ''
+        album = ((entry.get('album') or {}).get('name') or '')
+        if artist and title:
+            pairs.add(pair_key(artist, title))
+        if artist and album:
+            albums.add(pair_key(artist, album))
+    return {'ids': ids, 'pairs': pairs, 'albums': albums}
+
+
+def why_selected(candidate):
+    pubs = ', '.join(candidate.get('source_publications') or sorted(candidate.get('sources') or []))
+    bucket = candidate.get('bucket', 'emerging')
+    return f'Score {candidate.get("score", 0)}; {bucket} pick via {pubs or "press coverage"}.'
+
+
+def passes_quality_gate(candidate, track, catalog, subgenre_counts):
+    if not track or not track.get('id') or track['id'] in catalog['ids']:
+        return False
+    if candidate.get('source_scores') and candidate.get('score', 0) < MIN_SCORE:
+        return False
+    artist = ((track.get('artists') or [{}])[0].get('name') or candidate['artist'])
+    title = track.get('name') or candidate['title']
+    album = ((track.get('album') or {}).get('name') or candidate.get('album') or '')
+    if pair_key(artist, title) in catalog['pairs']:
+        return False
+    if album and pair_key(artist, album) in catalog['albums'] and candidate.get('kind') == 'album':
+        return False
+    subgenre = candidate.get('subgenre') or 'metal'
+    if subgenre_counts[subgenre] >= 4 and subgenre != 'metal':
+        return False
+    return True
+
+
+def select_tracks(ranked, known_ids, lookup, catalog=None):
+    catalog = dict(catalog or {})
+    catalog.setdefault('ids', set(known_ids))
+    catalog.setdefault('pairs', set())
+    catalog.setdefault('albums', set())
     chosen, uris = [], []
-    known = set(known_ids)
+    known = set(catalog['ids'])
     per_artist = Counter()
-    for candidate in ranked:
+    per_album = Counter()
+    subgenre_counts = Counter()
+    buckets = Counter()
+    pitchfork_only = 0
+    duplicates_rejected = 0
+
+    def _lookup(candidate):
+        if lookup.__code__.co_argcount == 1:
+            return lookup(candidate)
+        return lookup(candidate['artist'], candidate['title'])
+
+    def consider(candidate):
+        nonlocal duplicates_rejected, pitchfork_only
+        if len(chosen) >= MAX_TRACKS:
+            return False
+        if candidate.get('source_scores') and candidate.get('score', 0) < MIN_SCORE:
+            return False
+        resolved = _lookup(candidate)
+        if resolved is None:
+            return False
+        tracks = resolved if isinstance(resolved, list) else [resolved]
+        added = False
+        for track in tracks:
+            if not track or not track.get('id'):
+                continue
+            if track['id'] in known or pair_key(
+                ((track.get('artists') or [{}])[0].get('name') or ''),
+                track.get('name') or '',
+            ) in catalog['pairs']:
+                duplicates_rejected += 1
+                continue
+            artists = track.get('artists') or []
+            if not artists:
+                continue
+            artist = artists[0]['name'].lower()
+            album_name = ((track.get('album') or {}).get('name') or candidate.get('album') or '').lower()
+            if per_artist[artist] >= MAX_PER_ARTIST:
+                continue
+            if album_name and per_album[album_name] >= MAX_PER_ALBUM:
+                continue
+            if not passes_quality_gate(candidate, track, {'ids': known, 'pairs': catalog['pairs'], 'albums': catalog['albums']}, subgenre_counts):
+                continue
+            sources = candidate.get('sources') or set()
+            if sources == {'Pitchfork'} and pitchfork_only >= PITCHFORK_ONLY_CAP:
+                continue
+            chosen.append((candidate, track))
+            uris.append(track['uri'])
+            per_artist[artist] += 1
+            if album_name:
+                per_album[album_name] += 1
+            known.add(track['id'])
+            catalog['pairs'].add(pair_key(artists[0]['name'], track.get('name')))
+            if album_name:
+                catalog['albums'].add(pair_key(artists[0]['name'], album_name))
+            subgenre_counts[candidate.get('subgenre') or 'metal'] += 1
+            buckets[candidate.get('bucket') or 'emerging'] += 1
+            if sources == {'Pitchfork'}:
+                pitchfork_only += 1
+            added = True
+            if candidate.get('kind') != 'album':
+                break
+        return added
+
+    remaining = list(ranked)
+    for bucket, quota in BUCKET_QUOTAS.items():
+        still = []
+        for candidate in remaining:
+            if buckets[bucket] >= quota:
+                still.append(candidate)
+                continue
+            if (candidate.get('bucket') or 'emerging') != bucket:
+                still.append(candidate)
+                continue
+            if not consider(candidate):
+                still.append(candidate)
+        remaining = still
+    for candidate in remaining:
         if len(chosen) >= MAX_TRACKS:
             break
-        track = lookup(candidate['artist'], candidate['title'])
-        if not track or not track.get('id') or track['id'] in known:
-            continue
-        artists = track.get('artists') or []
-        if not artists:
-            continue
-        artist = artists[0]['name'].lower()
-        if per_artist[artist] >= MAX_PER_ARTIST:
-            continue
-        chosen.append((candidate, track))
-        uris.append(track['uri'])
-        per_artist[artist] += 1
-        known.add(track['id'])
-    return chosen, uris, known
+        consider(candidate)
+    catalog['ids'] = known
+    return chosen, uris, known, {'duplicates_rejected': duplicates_rejected, 'buckets': dict(buckets)}
 
 
-def write_report(chosen, uris):
+def write_report(chosen, uris, stats):
     lines = [
         f"# Metal Radar — {datetime.now(ROME).strftime('%Y-%m-%d %H:%M %Z')}",
         '',
-        f'Added tracks: {len(uris)}',
+        f'Playlist: {PLAYLIST_NAME}',
+        f'NEW TRACKS THIS WEEK: {len(uris)}',
+        f'TOTAL PLAYLIST TRACKS: {stats.get("playlist_total", len(uris))}',
+        f'DUPLICATES REJECTED: {stats.get("duplicates_rejected", 0)}',
+        f'SOURCES CONSULTED: {", ".join(stats.get("sources_consulted") or []) or "none"}',
         '',
-        '## Selection',
+        '## NEW TRACKS ADDED',
         '',
     ]
     if not chosen:
         lines.append('No new tracks this week.')
-    for candidate, track in chosen:
-        lines.append(f"- **{track['artists'][0]['name']} — {track['name']}** — score {candidate['score']}")
-    REPORT_PATH.write_text('\n'.join(lines) + '\n')
+    for index, (candidate, track) in enumerate(chosen, 1):
+        album = ((track.get('album') or {}).get('name') or candidate.get('album') or 'n/a')
+        pubs = ', '.join(candidate.get('source_publications') or sorted(candidate.get('sources') or []))
+        lines.extend([
+            f"{index}. **{track['artists'][0]['name']} — {track['name']}**",
+            f"   Album: {album}",
+            f"   Subgenre: {candidate.get('subgenre', 'metal')}",
+            f"   Score: {candidate.get('score', 0)}",
+            f"   Why: {why_selected(candidate)}",
+            f"   Sources: {pubs or 'n/a'}",
+            '',
+        ])
+    REPORT_PATH.write_text('\n'.join(lines).rstrip() + '\n')
 
 
 def main():
     history = load()
-    items = articles()
+    items, consulted = articles()
     access, granted_scope = _refresh_access_token()
     playlist = os.environ.get('SPOTIFY_PLAYLIST_ID', '')
     if not str(playlist).strip():
@@ -378,19 +744,34 @@ def main():
         print('Added tracks: 0')
         return
     current = existing(access, playlist)
-    known = set(history.get('tracks') or []) | playlist_ids(current)
-    chosen, uris, known = select_tracks(
-        candidates(items),
-        known,
-        lambda artist, title: search(access, artist, title),
+    catalog = catalog_from_items(current, history)
+    ranked = candidates(items)
+    chosen, uris, known, extra = select_tracks(
+        ranked,
+        catalog['ids'],
+        lambda candidate: resolve_candidate(access, candidate),
+        catalog,
     )
+    if len(chosen) < MIN_TRACKS:
+        print(f'Selection below target ({len(chosen)} < {MIN_TRACKS}); adding only vetted tracks')
     add(access, playlist, uris)
+    update_playlist_profile(access, playlist)
+    playlist_total = len(catalog['ids'] | known)
     history['tracks'] = sorted(tid for tid in known if tid)
+    history['pairs'] = sorted('|'.join(pair) for pair in catalog['pairs'] if pair[0] and pair[1])
+    history['albums'] = sorted('|'.join(pair) for pair in catalog['albums'] if pair[0] and pair[1])
     history['articles'] = [item['link'] for item in items]
     history['last_run'] = datetime.now(timezone.utc).isoformat()
     save(history)
-    write_report(chosen, uris)
+    stats = {
+        'duplicates_rejected': extra.get('duplicates_rejected', 0),
+        'sources_consulted': consulted,
+        'playlist_total': playlist_total,
+    }
+    write_report(chosen, uris, stats)
     print(f'Added tracks: {len(uris)}')
+    print(f'Sources consulted: {len(consulted)}')
+    print(f'Duplicates rejected: {stats["duplicates_rejected"]}')
 
 
 if __name__ == '__main__':

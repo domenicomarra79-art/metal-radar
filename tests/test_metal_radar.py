@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from datetime import datetime, timezone
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from metal_radar import (
@@ -15,6 +17,7 @@ from metal_radar import (
     _redact_endpoint,
     add,
     articles,
+    candidates,
     diagnose_spotify,
     existing,
     playlist_ids,
@@ -93,7 +96,7 @@ class SelectionTests(unittest.TestCase):
             ('Band A', 'Song 1'): track('id-1', 'Band A', 'Song 1'),
             ('Band B', 'Song 2'): track('id-2', 'Band B', 'Song 2'),
         }
-        chosen, uris, known = select_tracks(
+        chosen, uris, known, extra = select_tracks(
             ranked,
             {'id-1'},
             lambda artist, title: catalog[(artist, title)],
@@ -112,7 +115,7 @@ class SelectionTests(unittest.TestCase):
                 tid = f'{artist_n}-{song_n}'
                 ranked.append({'artist': artist, 'title': title, 'score': 100 - len(ranked)})
                 catalog[(artist, title)] = track(tid, artist, title)
-        chosen, uris, _ = select_tracks(
+        chosen, uris, _known, _extra = select_tracks(
             ranked,
             set(),
             lambda artist, title: catalog[(artist, title)],
@@ -127,10 +130,11 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(len(uris), 15)
 
     def test_empty_selection_is_success(self):
-        chosen, uris, known = select_tracks([], {'already'}, lambda artist, title: None)
+        chosen, uris, known, extra = select_tracks([], {'already'}, lambda artist, title: None)
         self.assertEqual(chosen, [])
         self.assertEqual(uris, [])
         self.assertEqual(known, {'already'})
+        self.assertEqual(extra['duplicates_rejected'], 0)
 
 
 class PlaylistTests(unittest.TestCase):
@@ -176,8 +180,9 @@ class PlaylistTests(unittest.TestCase):
 class RssTests(unittest.TestCase):
     @patch('metal_radar.feedparser.parse', side_effect=RuntimeError('network down'))
     def test_single_rss_failure_does_not_stop_run(self, _parse):
-        items = articles()
+        items, consulted = articles()
         self.assertEqual(items, [])
+        self.assertEqual(consulted, [])
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -225,10 +230,74 @@ class DiagnosticTests(unittest.TestCase):
     def test_summary_url_is_parsed_as_markup_string(self, parse):
         class Feed:
             bozo = False
-            entries = [{'title': 'A Band — A Song metal', 'summary': 'https://example.com/not-html', 'link': 'https://example.com/a', 'published': '2099-01-01T00:00:00Z'}]
+            entries = [{'title': 'A Band — A Song metal', 'summary': 'https://example.com/not-html', 'link': 'https://example.com/a', 'published': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}]
         parse.return_value = Feed()
-        items = articles()
+        items, _consulted = articles()
         self.assertTrue(any('A Band' in item['title'] for item in items))
+
+
+class ScoringTests(unittest.TestCase):
+    def _article(self, source, link, authority=8, kind='editorial', region='US'):
+        return {
+            'source': source,
+            'title': 'Iron Tomb — Black Halo',
+            'link': link,
+            'text': 'Iron Tomb — Black Halo death metal premiere album of the week',
+            'published': datetime.now(timezone.utc).isoformat(),
+            'region': region,
+            'kind': kind,
+            'authority': authority,
+        }
+
+    def test_multiple_publications_outrank_a_single_source(self):
+        one = candidates([self._article('Pitchfork', 'https://example.com/p')])
+        many = candidates([
+            self._article('Pitchfork', 'https://example.com/p'),
+            self._article('Decibel', 'https://example.com/d', authority=10),
+            self._article('Kerrang', 'https://example.com/k', authority=9, region='UK'),
+        ])
+        self.assertGreater(many[0]['score'], one[0]['score'])
+        self.assertGreaterEqual(many[0]['score'], 40)
+        self.assertEqual(sorted(many[0]['source_publications']), ['Decibel', 'Kerrang', 'Pitchfork'])
+
+    def test_rejects_feed_boilerplate_pairs(self):
+        junk = candidates([{
+            'source': 'Decibel',
+            'title': 'The post Track Premieres — Noroth Preview appeared first on Decibel Magazine',
+            'link': 'https://example.com/junk',
+            'text': 'The post Track Premieres — Noroth Preview appeared first on Decibel Magazine death metal',
+            'published': datetime.now(timezone.utc).isoformat(),
+            'region': 'US',
+            'kind': 'editorial',
+            'authority': 8,
+        }])
+        self.assertEqual(junk, [])
+
+    def test_pitchfork_does_not_dominate_selection(self):
+        ranked = []
+        catalog = {}
+        for index in range(8):
+            artist = f'Pitchfork Band {index}'
+            title = 'Song'
+            ranked.append({
+                'artist': artist,
+                'title': title,
+                'score': 90 - index,
+                'sources': {'Pitchfork'},
+                'source_publications': ['Pitchfork'],
+                'bucket': 'established',
+                'subgenre': 'death metal',
+                'kind': 'track',
+                'source_scores': {'quality': 30},
+            })
+            catalog[(artist, title)] = track(f'pf-{index}', artist, title)
+        chosen, uris, _known, _extra = select_tracks(
+            ranked,
+            set(),
+            lambda artist, title: catalog[(artist, title)],
+        )
+        self.assertLessEqual(len(chosen), 3)
+        self.assertEqual(len(uris), len(chosen))
 
 
 if __name__ == '__main__':

@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from dateutil import parser as date_parser
+from dateutil import parser as date_parer
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORY_PATH = ROOT / 'data' / 'history.json'
@@ -90,8 +90,29 @@ def candidates(items):
 
 def token():
     auth = base64.b64encode(f"{os.environ['SPOTIFY_CLIENT_ID']}:{os.environ['SPOTIFY_CLIENT_SECRET']}".encode()).decode()
-    response = requests.post('https://accounts.spotify.com/api/token', headers={'Authorization': f'Basic {auth}'}, data={'grant_type': 'refresh_token', 'refresh_token': os.environ['SPOTIFY_REFRESH_TOKEN']}, timeout=30)
-    response.raise_for_status()
+    response = requests.post(
+        'https://accounts.spotify.com/api/token',
+        headers={
+            'Authorization': f'Basic {auth}',
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        data={
+            'grant_type': 'refresh_token',
+            'refresh_token': os.environ['SPOTIFY_REFRESH_TOKEN'],
+        },
+        timeout=30,
+    )
+    if not response.ok:
+        try:
+            err = response.json()
+            error_code = err.get('error', 'unknown')
+            error_desc = err.get('error_description', 'no description')
+        except Exception:
+            error_code = 'parse_error'
+            error_desc = 'could not parse response body'
+        raise RuntimeError(
+            f"Spotify token error HTTP {response.status_code}: [{error_code}] {error_desc}"
+        )
     return response.json()['access_token']
 
 

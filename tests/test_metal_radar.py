@@ -13,6 +13,7 @@ from metal_radar import (
     SPOTIFY_TOKEN_URL,
     _mask_id,
     _redact_endpoint,
+    add,
     articles,
     diagnose_spotify,
     existing,
@@ -135,30 +136,41 @@ class SelectionTests(unittest.TestCase):
 class PlaylistTests(unittest.TestCase):
     def test_playlist_ids_ignore_missing_tracks(self):
         ids = playlist_ids([
-            {'track': {'id': 'abc'}},
-            {'track': None},
+            {'item': {'id': 'abc'}},
+            {'track': {'id': 'legacy'}},
+            {'item': None},
             {},
         ])
-        self.assertEqual(ids, {'abc'})
+        self.assertEqual(ids, {'abc', 'legacy'})
 
     @patch('metal_radar.requests.get')
-    def test_existing_paginates(self, get):
+    def test_existing_paginates_items_endpoint(self, get):
         first = MagicMock()
         first.ok = True
         first.json.return_value = {
-            'items': [{'track': {'id': 'a'}}],
-            'next': 'https://api.spotify.com/v1/playlists/xyz/tracks?offset=100',
+            'items': [{'item': {'id': 'a'}}],
+            'next': 'https://api.spotify.com/v1/playlists/xyz/items?offset=100',
         }
         second = MagicMock()
         second.ok = True
         second.json.return_value = {
-            'items': [{'track': {'id': 'b'}}],
+            'items': [{'item': {'id': 'b'}}],
             'next': None,
         }
         get.side_effect = [first, second]
         items = existing('token', 'xyz')
         self.assertEqual(playlist_ids(items), {'a', 'b'})
         self.assertEqual(get.call_count, 2)
+        self.assertEqual(get.call_args_list[0].args[0], 'https://api.spotify.com/v1/playlists/xyz/items')
+
+    @patch('metal_radar.requests.post')
+    def test_add_posts_to_items_endpoint(self, post):
+        response = MagicMock()
+        response.ok = True
+        post.return_value = response
+        add('token', 'xyz', ['spotify:track:abc'])
+        self.assertEqual(post.call_args.args[0], 'https://api.spotify.com/v1/playlists/xyz/items')
+        self.assertEqual(post.call_args.kwargs['json'], {'uris': ['spotify:track:abc']})
 
 
 class RssTests(unittest.TestCase):
@@ -189,14 +201,10 @@ class DiagnosticTests(unittest.TestCase):
         playlist.status_code = 403
         playlist.json.return_value = {'error': {'status': 403, 'message': 'Insufficient client scope'}}
         items = MagicMock()
-        items.ok = True
-        items.status_code = 200
-        items.json.return_value = {'items': [], 'total': 0}
-        tracks = MagicMock()
-        tracks.ok = False
-        tracks.status_code = 403
-        tracks.json.return_value = {'error': {'status': 403, 'message': 'Forbidden'}}
-        get.side_effect = [me, playlist, items, tracks]
+        items.ok = False
+        items.status_code = 403
+        items.json.return_value = {'error': {'status': 403, 'message': 'Forbidden'}}
+        get.side_effect = [me, playlist, items]
 
         with patch('builtins.print') as printer:
             with self.assertRaises(RuntimeError) as ctx:
@@ -204,8 +212,8 @@ class DiagnosticTests(unittest.TestCase):
         logged = '\n'.join(str(call.args[0]) for call in printer.call_args_list if call.args)
         self.assertIn('HTTP 403', logged)
         self.assertIn('Forbidden', logged)
-        self.assertIn('/playlists/***/tracks', logged)
         self.assertIn('/playlists/***/items', logged)
+        self.assertNotIn('/playlists/***/tracks', logged)
         self.assertNotIn('secretPlaylistId123', logged)
         self.assertNotIn('access-token', logged)
         self.assertNotIn('Bearer', logged)

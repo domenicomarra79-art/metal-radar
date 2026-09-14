@@ -250,17 +250,8 @@ def diagnose_spotify(access, playlist, granted_scope):
         timeout=30,
     )
     _log_spotify_call('playlist items', 'GET', items_url, items_response)
-
-    tracks_url = f'{SPOTIFY_API}/playlists/{playlist}/tracks'
-    tracks_response = requests.get(
-        tracks_url,
-        headers=_auth_headers(access),
-        params={'limit': 1},
-        timeout=30,
-    )
-    _log_spotify_call('playlist tracks', 'GET', tracks_url, tracks_response)
-    if not tracks_response.ok:
-        raise _spotify_error('playlist tracks', tracks_response)
+    if not items_response.ok:
+        raise _spotify_error('playlist items', items_response)
 
 
 def search(access, artist, title):
@@ -282,8 +273,8 @@ def search(access, artist, title):
 
 def existing(access, playlist):
     items = []
-    url = f'{SPOTIFY_API}/playlists/{playlist}/tracks'
-    params = {'limit': 100, 'fields': 'items(track(id)),next'}
+    url = f'{SPOTIFY_API}/playlists/{playlist}/items'
+    params = {'limit': 100}
     while url:
         response = requests.get(
             url,
@@ -293,8 +284,8 @@ def existing(access, playlist):
         )
         params = None
         if not response.ok:
-            _log_spotify_call('playlist tracks', 'GET', url, response)
-            raise _spotify_error('playlist tracks', response)
+            _log_spotify_call('playlist items', 'GET', url, response)
+            raise _spotify_error('playlist items', response)
         payload = response.json()
         items.extend(payload.get('items') or [])
         url = payload.get('next')
@@ -304,23 +295,34 @@ def existing(access, playlist):
 def add(access, playlist, uris):
     if not uris:
         return
+    url = f'{SPOTIFY_API}/playlists/{playlist}/items'
     response = requests.post(
-        f'{SPOTIFY_API}/playlists/{playlist}/tracks',
+        url,
         headers={**_auth_headers(access), 'Content-Type': 'application/json'},
         json={'uris': uris},
         timeout=30,
     )
     if not response.ok:
+        _log_spotify_call('playlist add', 'POST', url, response)
         raise _spotify_error('playlist add', response)
+
+
+def playlist_entry(item):
+    if not isinstance(item, dict):
+        return None
+    for key in ('item', 'track'):
+        entry = item.get(key)
+        if isinstance(entry, dict) and entry.get('id'):
+            return entry
+    return None
 
 
 def playlist_ids(items):
     ids = set()
     for item in items:
-        track = item.get('track') if isinstance(item, dict) else None
-        track_id = track.get('id') if isinstance(track, dict) else None
-        if track_id:
-            ids.add(track_id)
+        entry = playlist_entry(item)
+        if entry:
+            ids.add(entry['id'])
     return ids
 
 
@@ -368,8 +370,10 @@ def main():
     items = articles()
     access, granted_scope = _refresh_access_token()
     playlist = os.environ.get('SPOTIFY_PLAYLIST_ID', '')
-    diagnose_spotify(access, playlist, granted_scope)
+    if not str(playlist).strip():
+        raise RuntimeError('SPOTIFY_PLAYLIST_ID missing')
     if diagnostic_mode():
+        diagnose_spotify(access, playlist, granted_scope)
         print('Metal Radar diagnostic mode: playlist will not be modified')
         print('Added tracks: 0')
         return

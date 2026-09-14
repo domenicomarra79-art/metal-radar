@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from dateutil import parser as date_parer
+from dateutil import parser as date_parser
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORY_PATH = ROOT / 'data' / 'history.json'

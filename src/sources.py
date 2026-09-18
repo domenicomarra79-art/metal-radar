@@ -30,7 +30,6 @@ SOURCES = {
         'kind': 'editorial',
         'feeds': [
             'https://metalinjection.net/feed/',
-            'https://metalinjection.net/category/new-music/feed',
         ],
     },
     'Loudwire': {
@@ -66,7 +65,10 @@ SOURCES = {
         'authority': 9,
         'region': 'UK',
         'kind': 'editorial',
-        'feeds': ['https://www.kerrang.com/feed'],
+        'feeds': [
+            'https://www.kerrang.com/feed',
+            'https://www.kerrang.com/feed.rss',
+        ],
     },
     'Louder': {
         'tier': 1,
@@ -91,13 +93,6 @@ SOURCES = {
         'region': 'EU',
         'kind': 'specialist',
         'feeds': ['https://www.metal.de/feed/'],
-    },
-    'Sweden Rock': {
-        'tier': 1,
-        'authority': 6,
-        'region': 'EU',
-        'kind': 'specialist',
-        'feeds': ['https://www.swedenrockmagazine.com/feed'],
     },
     'Metalitalia': {
         'tier': 1,

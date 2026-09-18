@@ -11,7 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from metal_radar import (
     MAX_PER_ARTIST,
+    MAX_PER_SOURCE,
     MAX_TRACKS,
+    SINGLE_SPECIALIST_CAP,
     SPOTIFY_TOKEN_URL,
     _mask_id,
     _redact_endpoint,
@@ -23,6 +25,7 @@ from metal_radar import (
     playlist_ids,
     select_tracks,
     token,
+    valid_pair,
 )
 
 
@@ -178,11 +181,47 @@ class PlaylistTests(unittest.TestCase):
 
 
 class RssTests(unittest.TestCase):
-    @patch('metal_radar.feedparser.parse', side_effect=RuntimeError('network down'))
-    def test_single_rss_failure_does_not_stop_run(self, _parse):
+    @patch('metal_radar.requests.get', side_effect=RuntimeError('network down'))
+    def test_single_rss_failure_does_not_stop_run(self, _get):
         items, consulted = articles()
         self.assertEqual(items, [])
         self.assertEqual(consulted, [])
+
+    @patch('metal_radar.requests.get')
+    def test_partial_feed_failure_still_consults_source(self, get):
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.headers = {'content-type': 'application/rss+xml'}
+        ok.content = (
+            '<?xml version="1.0"?>'
+            '<rss><channel><item>'
+            '<title>Iron Tomb — Black Halo metal premiere</title>'
+            '<link>https://example.com/ok</link>'
+            '<pubDate>Fri, 18 Sep 2026 10:00:00 GMT</pubDate>'
+            '<description>death metal premiere</description>'
+            '</item></channel></rss>'
+        ).encode('utf-8')
+        blocked = MagicMock()
+        blocked.status_code = 403
+        blocked.headers = {'content-type': 'text/html'}
+        blocked.content = b'<html>blocked</html>'
+
+        def _side_effect(url, **_kwargs):
+            if 'kerrang' in url:
+                return blocked
+            if 'metalinjection.net/feed' in url:
+                return ok
+            empty = MagicMock()
+            empty.status_code = 404
+            empty.headers = {'content-type': 'text/html'}
+            empty.content = b'missing'
+            return empty
+
+        get.side_effect = _side_effect
+        items, consulted = articles()
+        self.assertIn('Metal Injection', consulted)
+        self.assertTrue(any(item['source'] == 'Metal Injection' for item in items))
+        self.assertNotIn('Kerrang', consulted)
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -226,12 +265,20 @@ class DiagnosticTests(unittest.TestCase):
         self.assertIn('ab***gh', logged)
         self.assertIn('Forbidden', str(ctx.exception))
 
-    @patch('metal_radar.feedparser.parse')
-    def test_summary_url_is_parsed_as_markup_string(self, parse):
-        class Feed:
-            bozo = False
-            entries = [{'title': 'A Band — A Song metal', 'summary': 'https://example.com/not-html', 'link': 'https://example.com/a', 'published': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}]
-        parse.return_value = Feed()
+    @patch('metal_radar.requests.get')
+    def test_summary_url_is_parsed_as_markup_string(self, get):
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {'content-type': 'application/rss+xml'}
+        response.content = (
+            '<?xml version="1.0"?><rss><channel><item>'
+            '<title>A Band — A Song metal</title>'
+            '<link>https://example.com/a</link>'
+            '<description>https://example.com/not-html</description>'
+            '<pubDate>Fri, 18 Sep 2026 10:00:00 GMT</pubDate>'
+            '</item></channel></rss>'
+        ).encode('utf-8')
+        get.return_value = response
         items, _consulted = articles()
         self.assertTrue(any('A Band' in item['title'] for item in items))
 
@@ -273,6 +320,76 @@ class ScoringTests(unittest.TestCase):
         }])
         self.assertEqual(junk, [])
 
+    def test_rejects_german_and_italian_boilerplate_pairs(self):
+        self.assertIsNone(valid_pair('Der Beitrag Ludgar', 'Violent Visions erschien zuerst'))
+        self.assertIsNone(valid_pair('HAVOK', 'cambio di location per la data di Milano'))
+        self.assertIsNone(valid_pair('Archetype X', 'Premiere des Musikvideos zu Void'))
+        self.assertIsNone(valid_pair('WATCH', 'ANTHRAX Gleefully Torture Ex-SAMHAIN Drummer'))
+        self.assertIsNone(valid_pair('LISTEN', 'THE OCEAN Teams Up With TANGERINE DREAM'))
+        self.assertIsNone(valid_pair('ENTER NOW', 'Win a Trip to See Metallica'))
+        self.assertIsNone(valid_pair('PeelingFlesh Announce New Self', 'Titled Album: Hear Murderous Intent'))
+        self.assertIsNone(valid_pair("Metallica's M72 tour returns", 'with the support act they thanked for'))
+        self.assertIsNone(valid_pair('CELESTIAL SCOURGE', 'il nuovo singolo “Dreamstate'))
+        self.assertEqual(valid_pair('Ludgar', 'Violent Visions'), ('Ludgar', 'Violent Visions'))
+        self.assertEqual(valid_pair('Letterbombs', "I'm Not Here To Enjoy My Life"), ('Letterbombs', "I'm Not Here To Enjoy My Life"))
+
+    def test_single_specialist_source_is_capped_below_editorial(self):
+        specialist = candidates([self._article('Metal.de', 'https://example.com/m', kind='specialist', region='EU')])
+        editorial = candidates([
+            self._article('Pitchfork', 'https://example.com/p'),
+            self._article('Decibel', 'https://example.com/d', authority=10),
+        ])
+        self.assertLessEqual(specialist[0]['score'], 70)
+        self.assertGreater(editorial[0]['score'], specialist[0]['score'])
+
+    def test_max_tracks_per_source_and_single_specialist_cap(self):
+        ranked = []
+        catalog = {}
+        for index in range(8):
+            artist = f'Metal.de Band {index}'
+            title = 'Song'
+            ranked.append({
+                'artist': artist,
+                'title': title,
+                'score': 80 - index,
+                'sources': {'Metal.de'},
+                'kinds': {'specialist'},
+                'source_publications': ['Metal.de'],
+                'bucket': 'european',
+                'subgenre': 'black metal',
+                'kind': 'track',
+                'source_scores': {'quality': 20},
+            })
+            catalog[(artist, title)] = track(f'md-{index}', artist, title)
+        for index in range(5):
+            artist = f'Editorial Band {index}'
+            title = 'Song'
+            ranked.append({
+                'artist': artist,
+                'title': title,
+                'score': 88 - index,
+                'sources': {'Decibel'},
+                'kinds': {'editorial'},
+                'source_publications': ['Decibel'],
+                'bucket': 'emerging',
+                'subgenre': 'death metal',
+                'kind': 'track',
+                'source_scores': {'quality': 30},
+            })
+            catalog[(artist, title)] = track(f'ed-{index}', artist, title)
+        chosen, uris, _known, extra = select_tracks(
+            ranked,
+            set(),
+            lambda artist, title: catalog[(artist, title)],
+        )
+        metal_de = sum(1 for candidate, _track in chosen if candidate['sources'] == {'Metal.de'})
+        decibel = sum(1 for candidate, _track in chosen if 'Decibel' in candidate['sources'])
+        self.assertLessEqual(metal_de, SINGLE_SPECIALIST_CAP)
+        self.assertLessEqual(decibel, MAX_PER_SOURCE)
+        self.assertGreaterEqual(decibel, 1)
+        self.assertEqual(len(uris), len(chosen))
+        self.assertLessEqual(extra['per_source'].get('Metal.de', 0), MAX_PER_SOURCE)
+
     def test_pitchfork_does_not_dominate_selection(self):
         ranked = []
         catalog = {}
@@ -284,6 +401,7 @@ class ScoringTests(unittest.TestCase):
                 'title': title,
                 'score': 90 - index,
                 'sources': {'Pitchfork'},
+                'kinds': {'editorial'},
                 'source_publications': ['Pitchfork'],
                 'bucket': 'established',
                 'subgenre': 'death metal',

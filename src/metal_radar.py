@@ -45,10 +45,11 @@ FEED_HEADERS = {
 PLAYLIST_NAME = f'METAL RADAR — {datetime.now(ROME).year}'
 PLAYLIST_DESCRIPTION = (
     'The essential metal radar. New riffs, heavy sounds and future classics — '
-    'curated weekly from the best metal press across the US, UK, Europe and Italy. '
+    'curated weekly from Pitchfork, Revolver, Metal Injection, Loudwire, Stereogum, '
+    'Consequence, BrooklynVegan, Louder and The Quietus. '
     'No algorithm. No filler. Just the stuff worth hearing.'
 )
-BUCKET_QUOTAS = {'established': 6, 'emerging': 5, 'underground': 3, 'european': 1}
+BUCKET_QUOTAS = {'established': 6, 'emerging': 6, 'underground': 3}
 
 METAL = re.compile(
     r'metal|doom|thrash|deathcore|metalcore|hardcore|sludge|stoner|post-metal|'
@@ -194,13 +195,11 @@ def is_album(text, title):
 
 
 def source_bucket(sources, regions, kinds):
-    if regions <= {'IT', 'EU'} and 'editorial' not in kinds:
-        return 'european'
     if kinds <= {'specialist', 'wire'} or (len(sources) == 1 and 'specialist' in kinds):
         return 'underground'
     if len(sources) >= 3 or 'Pitchfork' in sources and len(sources) >= 2:
         return 'established'
-    if 'Pitchfork' in sources or 'Kerrang' in sources or 'Louder' in sources:
+    if 'Pitchfork' in sources or 'Louder' in sources or 'The Quietus' in sources:
         return 'established' if len(sources) >= 2 else 'emerging'
     return 'emerging'
 

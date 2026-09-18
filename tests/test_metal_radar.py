@@ -207,7 +207,7 @@ class RssTests(unittest.TestCase):
         blocked.content = b'<html>blocked</html>'
 
         def _side_effect(url, **_kwargs):
-            if 'kerrang' in url:
+            if 'thequietus' in url:
                 return blocked
             if 'metalinjection.net/feed' in url:
                 return ok
@@ -221,7 +221,7 @@ class RssTests(unittest.TestCase):
         items, consulted = articles()
         self.assertIn('Metal Injection', consulted)
         self.assertTrue(any(item['source'] == 'Metal Injection' for item in items))
-        self.assertNotIn('Kerrang', consulted)
+        self.assertNotIn('The Quietus', consulted)
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -300,19 +300,19 @@ class ScoringTests(unittest.TestCase):
         one = candidates([self._article('Pitchfork', 'https://example.com/p')])
         many = candidates([
             self._article('Pitchfork', 'https://example.com/p'),
-            self._article('Decibel', 'https://example.com/d', authority=10),
-            self._article('Kerrang', 'https://example.com/k', authority=9, region='UK'),
+            self._article('Revolver', 'https://example.com/r', authority=8),
+            self._article('Louder', 'https://example.com/l', authority=8, region='UK'),
         ])
         self.assertGreater(many[0]['score'], one[0]['score'])
         self.assertGreaterEqual(many[0]['score'], 40)
-        self.assertEqual(sorted(many[0]['source_publications']), ['Decibel', 'Kerrang', 'Pitchfork'])
+        self.assertEqual(sorted(many[0]['source_publications']), ['Louder', 'Pitchfork', 'Revolver'])
 
     def test_rejects_feed_boilerplate_pairs(self):
         junk = candidates([{
-            'source': 'Decibel',
-            'title': 'The post Track Premieres — Noroth Preview appeared first on Decibel Magazine',
+            'source': 'Revolver',
+            'title': 'The post Track Premieres — Noroth Preview appeared first on Revolver',
             'link': 'https://example.com/junk',
-            'text': 'The post Track Premieres — Noroth Preview appeared first on Decibel Magazine death metal',
+            'text': 'The post Track Premieres — Noroth Preview appeared first on Revolver death metal',
             'published': datetime.now(timezone.utc).isoformat(),
             'region': 'US',
             'kind': 'editorial',
@@ -334,10 +334,10 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(valid_pair('Letterbombs', "I'm Not Here To Enjoy My Life"), ('Letterbombs', "I'm Not Here To Enjoy My Life"))
 
     def test_single_specialist_source_is_capped_below_editorial(self):
-        specialist = candidates([self._article('Metal.de', 'https://example.com/m', kind='specialist', region='EU')])
+        specialist = candidates([self._article('Wire Dump', 'https://example.com/m', kind='wire', region='US', authority=6)])
         editorial = candidates([
             self._article('Pitchfork', 'https://example.com/p'),
-            self._article('Decibel', 'https://example.com/d', authority=10),
+            self._article('Revolver', 'https://example.com/r', authority=8),
         ])
         self.assertLessEqual(specialist[0]['score'], 70)
         self.assertGreater(editorial[0]['score'], specialist[0]['score'])
@@ -346,21 +346,21 @@ class ScoringTests(unittest.TestCase):
         ranked = []
         catalog = {}
         for index in range(8):
-            artist = f'Metal.de Band {index}'
+            artist = f'Wire Band {index}'
             title = 'Song'
             ranked.append({
                 'artist': artist,
                 'title': title,
                 'score': 80 - index,
-                'sources': {'Metal.de'},
-                'kinds': {'specialist'},
-                'source_publications': ['Metal.de'],
-                'bucket': 'european',
+                'sources': {'Wire Dump'},
+                'kinds': {'wire'},
+                'source_publications': ['Wire Dump'],
+                'bucket': 'underground',
                 'subgenre': 'black metal',
                 'kind': 'track',
                 'source_scores': {'quality': 20},
             })
-            catalog[(artist, title)] = track(f'md-{index}', artist, title)
+            catalog[(artist, title)] = track(f'wd-{index}', artist, title)
         for index in range(5):
             artist = f'Editorial Band {index}'
             title = 'Song'
@@ -368,9 +368,9 @@ class ScoringTests(unittest.TestCase):
                 'artist': artist,
                 'title': title,
                 'score': 88 - index,
-                'sources': {'Decibel'},
+                'sources': {'Revolver'},
                 'kinds': {'editorial'},
-                'source_publications': ['Decibel'],
+                'source_publications': ['Revolver'],
                 'bucket': 'emerging',
                 'subgenre': 'death metal',
                 'kind': 'track',
@@ -382,13 +382,13 @@ class ScoringTests(unittest.TestCase):
             set(),
             lambda artist, title: catalog[(artist, title)],
         )
-        metal_de = sum(1 for candidate, _track in chosen if candidate['sources'] == {'Metal.de'})
-        decibel = sum(1 for candidate, _track in chosen if 'Decibel' in candidate['sources'])
-        self.assertLessEqual(metal_de, SINGLE_SPECIALIST_CAP)
-        self.assertLessEqual(decibel, MAX_PER_SOURCE)
-        self.assertGreaterEqual(decibel, 1)
+        wire = sum(1 for candidate, _track in chosen if candidate['sources'] == {'Wire Dump'})
+        revolver = sum(1 for candidate, _track in chosen if 'Revolver' in candidate['sources'])
+        self.assertLessEqual(wire, SINGLE_SPECIALIST_CAP)
+        self.assertLessEqual(revolver, MAX_PER_SOURCE)
+        self.assertGreaterEqual(revolver, 1)
         self.assertEqual(len(uris), len(chosen))
-        self.assertLessEqual(extra['per_source'].get('Metal.de', 0), MAX_PER_SOURCE)
+        self.assertLessEqual(extra['per_source'].get('Wire Dump', 0), MAX_PER_SOURCE)
 
     def test_pitchfork_does_not_dominate_selection(self):
         ranked = []

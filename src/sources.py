@@ -9,13 +9,6 @@ SOURCES = {
             'https://pitchfork.com/feed/feed-album-reviews/rss',
         ],
     },
-    'Decibel': {
-        'tier': 1,
-        'authority': 10,
-        'region': 'US',
-        'kind': 'editorial',
-        'feeds': ['https://www.decibelmagazine.com/feed/'],
-    },
     'Revolver': {
         'tier': 1,
         'authority': 8,
@@ -60,16 +53,6 @@ SOURCES = {
         'kind': 'editorial',
         'feeds': ['https://www.brooklynvegan.com/feed/'],
     },
-    'Kerrang': {
-        'tier': 1,
-        'authority': 9,
-        'region': 'UK',
-        'kind': 'editorial',
-        'feeds': [
-            'https://www.kerrang.com/feed',
-            'https://www.kerrang.com/feed.rss',
-        ],
-    },
     'Louder': {
         'tier': 1,
         'authority': 8,
@@ -86,41 +69,6 @@ SOURCES = {
         'region': 'UK',
         'kind': 'editorial',
         'feeds': ['https://thequietus.com/feed/'],
-    },
-    'Metal.de': {
-        'tier': 1,
-        'authority': 8,
-        'region': 'EU',
-        'kind': 'specialist',
-        'feeds': ['https://www.metal.de/feed/'],
-    },
-    'Metalitalia': {
-        'tier': 1,
-        'authority': 8,
-        'region': 'IT',
-        'kind': 'specialist',
-        'feeds': ['https://metalitalia.com/feed/'],
-    },
-    'TrueMetal': {
-        'tier': 1,
-        'authority': 7,
-        'region': 'IT',
-        'kind': 'specialist',
-        'feeds': ['https://www.truemetal.it/feed'],
-    },
-    'Metallus': {
-        'tier': 1,
-        'authority': 6,
-        'region': 'IT',
-        'kind': 'specialist',
-        'feeds': ['https://metallus.it/feed'],
-    },
-    'Blabbermouth': {
-        'tier': 2,
-        'authority': 6,
-        'region': 'US',
-        'kind': 'wire',
-        'feeds': ['https://www.blabbermouth.net/feed/'],
     },
 }
 

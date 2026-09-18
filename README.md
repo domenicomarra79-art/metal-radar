@@ -2,7 +2,7 @@
 
 Automated weekly editorial metal radar for Spotify.
 
-Every Friday at 08:00 Europe/Rome, GitHub Actions collects recent metal coverage, selects up to 15 tracks, removes duplicates, and appends new tracks to the Spotify playlist.
+Every Friday at 01:00 Europe/Rome, GitHub Actions collects recent metal coverage, selects up to 15 tracks, removes duplicates, and appends new tracks to the Spotify playlist.
 
 ## Required GitHub Secrets
 

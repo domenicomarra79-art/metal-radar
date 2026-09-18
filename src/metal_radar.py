@@ -43,13 +43,10 @@ FEED_HEADERS = {
     'User-Agent': 'MetalRadar/1.0 (+https://github.com/domenicomarra79-art/metal-radar)',
     'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
 }
-PLAYLIST_NAME = f'METAL RADAR — {datetime.now(ROME).year}'
+PLAYLIST_NAME = 'METAL RADAR'
 PLAYLIST_DESCRIPTION = (
     'The essential metal radar. New riffs, heavy sounds and future classics — '
-    'curated weekly from Pitchfork, Decibel, Revolver, Metal Injection, Loudwire, '
-    'Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, The Quietus, '
-    'Metalitalia and Metallus. '
-    'No algorithm. No filler. Just the stuff worth hearing.'
+    'curated weekly from the best metal press'
 )
 BUCKET_QUOTAS = {'established': 6, 'emerging': 5, 'underground': 3, 'european': 1}
 
@@ -663,18 +660,6 @@ def add(access, playlist, uris):
         raise _spotify_error('playlist add', response)
 
 
-def update_playlist_profile(access, playlist):
-    url = f'{SPOTIFY_API}/playlists/{playlist}'
-    response = requests.put(
-        url,
-        headers={**_auth_headers(access), 'Content-Type': 'application/json'},
-        json={'name': PLAYLIST_NAME, 'description': PLAYLIST_DESCRIPTION},
-        timeout=30,
-    )
-    if not response.ok:
-        _log_spotify_call('playlist profile', 'PUT', url, response)
-
-
 def playlist_entry(item):
     if not isinstance(item, dict):
         return None
@@ -913,7 +898,6 @@ def main():
     if len(chosen) < MIN_TRACKS:
         print(f'Selection below target ({len(chosen)} < {MIN_TRACKS}); adding only vetted tracks')
     add(access, playlist, uris)
-    update_playlist_profile(access, playlist)
     playlist_total = len(catalog['ids'] | known)
     history['tracks'] = sorted(tid for tid in known if tid)
     history['pairs'] = sorted('|'.join(pair) for pair in catalog['pairs'] if pair[0] and pair[1])

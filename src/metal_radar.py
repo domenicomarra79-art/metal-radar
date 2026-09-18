@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,17 +31,24 @@ MIN_TRACKS = 8
 MAX_TRACKS = 15
 MAX_PER_ARTIST = 2
 MAX_PER_ALBUM = 3
+MAX_PER_SOURCE = 3
 CANDIDATE_POOL = 60
 MIN_SCORE = 40
 PITCHFORK_ONLY_CAP = 3
+SINGLE_SPECIALIST_CAP = 3
 SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token'
 SPOTIFY_API = 'https://api.spotify.com/v1'
 SEARCH_LIMIT = 5
-FEED_HEADERS = {'User-Agent': 'MetalRadar/1.0 (+https://github.com/domenicomarra79-art/metal-radar)'}
+FEED_HEADERS = {
+    'User-Agent': 'MetalRadar/1.0 (+https://github.com/domenicomarra79-art/metal-radar)',
+    'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+}
 PLAYLIST_NAME = f'METAL RADAR — {datetime.now(ROME).year}'
 PLAYLIST_DESCRIPTION = (
     'The essential metal radar. New riffs, heavy sounds and future classics — '
-    'curated weekly from the best metal press across the US, UK, Europe and Italy. '
+    'curated weekly from Pitchfork, Decibel, Revolver, Metal Injection, Loudwire, '
+    'Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, The Quietus, '
+    'Metalitalia and Metallus. '
     'No algorithm. No filler. Just the stuff worth hearing.'
 )
 BUCKET_QUOTAS = {'established': 6, 'emerging': 5, 'underground': 3, 'european': 1}
@@ -51,6 +59,38 @@ METAL = re.compile(
     re.I,
 )
 PAIR = re.compile(r'(?P<artist>[A-Z][^—–\-:|]{1,80})\s*[—–\-:]\s*["“\']?(?P<title>[^"”\'\n|]{2,100})')
+PREMIERE_PAIR = re.compile(
+    r'(?:Track Premiere|Video Premiere|Full(?: Album)? Stream)\s*[:—–-]\s*'
+    r'(?P<artist>[^–\—"“\']+?)\s*[–—\-:]\s*["“\']?(?P<title>[^"”\'\n]+)',
+    re.I,
+)
+MI_QUOTED_PAIR = re.compile(
+    r'(?:LISTEN|WATCH)\s*[:—–-]\s*'
+    r'(?P<artist>(?:[A-Z0-9][A-Z0-9.&\'’/-]*)(?:\s+(?:&|AND|THE|OF|[A-Z0-9][A-Z0-9.&\'’/-]*)){0,6})\b'
+    r'[^"“]{0,120}?["“](?P<title>[^"”]{2,80})["”]',
+)
+HEAR_QUOTED_PAIR = re.compile(
+    r'\bHear\s+(?P<artist>[A-Z][\w.&’/-]*(?:\s+[A-Z][\w.&’/-]*){0,3})[\'’]?s?\s+'
+    r'(?:first\s+|new\s+)?(?:album|song|single|track).{0,80}?["“‘](?P<title>[^"”’]{2,80})["”’]',
+)
+ANNOUNCE_QUOTED_PAIR = re.compile(
+    r'(?P<artist>[A-Z][A-Z0-9][A-Z0-9\s.&\'’/-]{0,40}?)\s+Announce\b[^"“]{0,100}?["“](?P<title>[^"”]{2,80})["”]',
+)
+IT_SINGLE_PAIR = re.compile(
+    r'^(?P<artist>[A-ZÀ-Ü0-9][^:]{1,60}?)\s*:\s*'
+    r'(?:il nuovo singolo|il video(?: del nuovo singolo)?(?: di)?|la nuova versione di)\s*'
+    r'["“](?P<title>[^"”]{2,80})["”]',
+    re.I,
+)
+METAL_NATIVE_SOURCES = {
+    'Decibel',
+    'Revolver',
+    'Metal Injection',
+    'Loudwire',
+    'Kerrang',
+    'Metalitalia',
+    'Metallus',
+}
 PLAYLIST_IN_URL = re.compile(r'(/playlists/)([^/?#]+)')
 REQUIRED_PLAYLIST_SCOPES = (
     'playlist-read-private',
@@ -60,7 +100,11 @@ REQUIRED_PLAYLIST_SCOPES = (
 NOISE = re.compile(
     r'the best|this week|metal hammer|new music friday|albums you need|tracklist|'
     r'best metal|new metal albums|new metal releases|you need to hear|'
-    r'the post\b|appeared first|track premieres?|album review|news roundup',
+    r'the post\b|appeared first|track premieres?|album review|news roundup|'
+    r'der beitrag\b|erschien zuerst|l[\'’]articolo\b|black listed friday|'
+    r'premiere des musikvideos|premiere der single|veröffentlichen|erhältlich|'
+    r'cambio di location|una data al|live il\b|biglietti|dettagli dell|'
+    r'enter now|win a trip|share new version|album dal vivo|live at\b',
     re.I,
 )
 EDITORIAL = re.compile(
@@ -114,26 +158,41 @@ def clean_text(entry):
     return title, f'{title} {summary}'
 
 
+def fetch_feed(url):
+    try:
+        response = requests.get(url, headers=FEED_HEADERS, timeout=30)
+    except Exception as exc:
+        return None, f'{type(exc).__name__}'
+    if response.status_code != 200:
+        return None, f'HTTP {response.status_code}'
+    content_type = (response.headers.get('content-type') or '').lower()
+    body = response.content
+    if 'html' in content_type and b'<rss' not in body[:2000] and b'<feed' not in body[:2000]:
+        return None, 'html response'
+    feed = feedparser.parse(body)
+    entries = getattr(feed, 'entries', None) or []
+    if not entries:
+        reason = 'parse error' if getattr(feed, 'bozo', False) else 'empty feed'
+        return None, reason
+    return feed, None
+
+
 def articles():
     output = []
     consulted = []
     for source, config in SOURCES.items():
         fetched = False
+        failures = []
         for url in config['feeds']:
-            try:
-                feed = feedparser.parse(url, request_headers=FEED_HEADERS)
-            except Exception as exc:
-                print(f'RSS source skipped: {source} ({type(exc).__name__})')
-                continue
-            entries = getattr(feed, 'entries', None) or []
-            if getattr(feed, 'bozo', False) and not entries:
-                print(f'RSS source skipped: {source} (parse error)')
+            feed, error = fetch_feed(url)
+            if error:
+                failures.append(error)
                 continue
             fetched = True
-            for entry in entries:
+            for entry in feed.entries:
                 date = published(entry)
                 title, text = clean_text(entry)
-                if not METAL.search(text):
+                if source not in METAL_NATIVE_SOURCES and not METAL.search(text):
                     continue
                 if NOSTALGIA.search(text) and not CURRENT.search(text):
                     continue
@@ -151,6 +210,8 @@ def articles():
                 })
         if fetched:
             consulted.append(source)
+        elif failures:
+            print(f'RSS source skipped: {source} ({failures[0]})')
     unique = {}
     for item in output:
         unique[item['link'] or item['title']] = item
@@ -173,7 +234,7 @@ def source_bucket(sources, regions, kinds):
         return 'underground'
     if len(sources) >= 3 or 'Pitchfork' in sources and len(sources) >= 2:
         return 'established'
-    if 'Pitchfork' in sources or 'Kerrang' in sources or 'Louder' in sources:
+    if 'Pitchfork' in sources or 'Kerrang' in sources or 'Louder' in sources or 'The Quietus' in sources:
         return 'established' if len(sources) >= 2 else 'emerging'
     return 'emerging'
 
@@ -194,17 +255,24 @@ def score_candidate(item):
     sources = item['sources']
     kinds = item['kinds']
     authority = max(item['authorities'] or [5])
+    single_specialist = len(sources) == 1 and kinds <= {'specialist', 'wire'}
     quality = min(30, 12 + authority * 2 + (8 if item['editorial'] else 0))
-    originality = 20 if item['bucket'] in {'underground', 'european'} else 12 if item['bucket'] == 'emerging' else 8
+    if single_specialist:
+        originality = 8
+        discovery = 4
+    else:
+        originality = 20 if item['bucket'] in {'underground', 'european'} else 12 if item['bucket'] == 'emerging' else 8
+        discovery = 10 if item['bucket'] in {'underground', 'european', 'emerging'} else 4
     critical = min(15, 5 * max(0, len(sources) - 1) + (5 if item['editorial'] else 0))
     relevance = 10 if item['recent'] else 6
     metal_cred = 10 if item['subgenre'] != 'metal' else 7
-    discovery = 10 if item['bucket'] in {'underground', 'european', 'emerging'} else 4
     diversity = 5
     total = quality + originality + critical + relevance + metal_cred + discovery + diversity
     total = min(100, total + consensus_bonus(len(sources), kinds))
     if 'Pitchfork' in sources and len(sources) == 1:
         total = min(total, 72)
+    if single_specialist:
+        total = min(total, 70)
     return total, {
         'quality': quality,
         'originality': originality,
@@ -216,19 +284,79 @@ def score_candidate(item):
     }
 
 
+def extract_pairs(text):
+    pairs = []
+    for pattern in (PREMIERE_PAIR, MI_QUOTED_PAIR, HEAR_QUOTED_PAIR, ANNOUNCE_QUOTED_PAIR, IT_SINGLE_PAIR, PAIR):
+        for match in pattern.finditer(text or ''):
+            parsed = valid_pair(match.group('artist'), match.group('title'))
+            if parsed:
+                pairs.append(parsed)
+    unique = []
+    seen = set()
+    for artist, title in pairs:
+        key = (artist.lower(), title.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((artist, title))
+    return unique
+
+
 def valid_pair(artist, title):
-    artist = re.sub(r'\s+', ' ', artist).strip(' .,:"\'')
-    title = re.sub(r'\s+', ' ', title).strip(' .,:"\'')
+    artist = re.sub(r'\s+', ' ', artist).strip(' .,:"\'’')
+    title = re.sub(r'\s+', ' ', title).strip(' .,:"\'’')
     artist = re.sub(r'^(review|interview|news|album)\s*\]\s*', '', artist, flags=re.I)
+    artist = re.sub(r'[\'’]s$', '', artist).strip(' .,:"\'’')
+    title = re.sub(r'\s*[–—-]\s*$', '', title).strip()
+    if re.search(r'\breviews?\b|\bbehind\b|\bdigging deep\b|\btheir new\b', artist, re.I):
+        return None
+    if len(title.split()) > 8 and not re.search(r'[A-Za-z]', title[:20]):
+        return None
+    # Reject summary bleed where title still contains the artist name twice.
+    if len(title) > 40 and artist.lower() in title.lower()[len(artist):]:
+        return None
     if len(artist) < 2 or len(title) < 2 or len(artist) > 50 or len(title) > 70:
         return None
-    if len(artist.split()) > 5:
+    if len(artist.split()) > 6:
         return None
     if NOISE.search(artist) or NOISE.search(title):
         return None
-    if re.search(r'\b(announces|interview|festival|\bfest\b|pre-?order|vinyl variant|dettagli dell)\b', artist, re.I):
+    if artist.lower() in {'metal', 'metal scene', 'news', 'review', 'album', 'premiere', 'first look'}:
         return None
-    if re.search(r'\b(tour|concerto|biglietti|carroponte|intervista)\b|\b202[7-9]\b', title, re.I):
+    if re.search(r'\*{2,}|f\*\*+', artist, re.I):
+        return None
+    if re.search(
+        r'^(watch|listen|read|enter|full|video|news|premiere|stream|welcome|hear|first look|'
+        r'photo credit|kenbassador)\b',
+        artist,
+        re.I,
+    ):
+        return None
+    if re.search(
+        r'\b(announces?|interview|festival|\bfest\b|pre-?order|vinyl variant|dettagli dell|'
+        r'special|beitrag|artikel|premiere des|premiere der|tour returns|'
+        r'went super|most exciting|thanked for)\b',
+        artist,
+        re.I,
+    ):
+        return None
+    if re.search(
+        r'^(il nuovo|la nuova|with the|conceptual|titled album|back to the|disponibile)\b',
+        title,
+        re.I,
+    ):
+        return None
+    if re.search(
+        r'\b(tour|concerto|biglietti|carroponte|intervista|location|musikvideos?|'
+        r'veröffentlichen|erhältlich|physisch|single vom|zweite single|'
+        r'win a trip|anybody living|month[- ]long|support act|nuovo singolo|'
+        r'rivelati i dettagli|neues video|szene gefeiert|horror nights|'
+        r'barbie|mattel|use your illusion|photo credit)\b|\b202[7-9]\b|\b199[0-9]\b',
+        title,
+        re.I,
+    ):
+        return None
+    if len(artist.split()) >= 3 and len(title.split()) <= 2 and title.isupper():
         return None
     if not re.search(r'[A-Za-zÀ-ÿ]', artist) or not re.search(r'[A-Za-zÀ-ÿ]', title):
         return None
@@ -238,13 +366,9 @@ def valid_pair(artist, title):
 def candidates(items):
     grouped = {}
     for article in items:
-        blobs = [article['title'], article['text'][:400]]
+        blobs = [article['title'], article['text'][:500]]
         for blob in blobs:
-            for match in PAIR.finditer(blob):
-                parsed = valid_pair(match.group('artist'), match.group('title'))
-                if not parsed:
-                    continue
-                artist, title = parsed
+            for artist, title in extract_pairs(blob):
                 key = (artist.lower(), title.lower())
                 if key not in grouped:
                     grouped[key] = {
@@ -430,15 +554,22 @@ def diagnose_spotify(access, playlist, granted_scope):
 
 
 def _search(access, query, kind):
-    response = requests.get(
-        f'{SPOTIFY_API}/search',
-        headers=_auth_headers(access),
-        params={'q': query, 'type': kind, 'market': 'IT', 'limit': SEARCH_LIMIT},
-        timeout=30,
-    )
-    if not response.ok:
+    last_error = None
+    for attempt in range(3):
+        response = requests.get(
+            f'{SPOTIFY_API}/search',
+            headers=_auth_headers(access),
+            params={'q': query, 'type': kind, 'market': 'IT', 'limit': SEARCH_LIMIT},
+            timeout=30,
+        )
+        if response.ok:
+            return response.json()
+        if response.status_code in {502, 503, 504} and attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+            last_error = response
+            continue
         raise _spotify_error('search', response)
-    return response.json()
+    raise _spotify_error('search', last_error)
 
 
 def search(access, artist, title):
@@ -618,9 +749,11 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
     known = set(catalog['ids'])
     per_artist = Counter()
     per_album = Counter()
+    per_source = Counter()
     subgenre_counts = Counter()
     buckets = Counter()
     pitchfork_only = 0
+    single_specialist = 0
     duplicates_rejected = 0
 
     def _lookup(candidate):
@@ -628,11 +761,30 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
             return lookup(candidate)
         return lookup(candidate['artist'], candidate['title'])
 
+    def _is_single_specialist(candidate):
+        sources = candidate.get('sources') or set()
+        kinds = candidate.get('kinds') or set()
+        return len(sources) == 1 and kinds <= {'specialist', 'wire'}
+
+    def _selection_priority(candidate):
+        sources = candidate.get('sources') or set()
+        kinds = candidate.get('kinds') or set()
+        editorial = 2 if 'editorial' in kinds else 0
+        multi = min(2, max(0, len(sources) - 1))
+        return (editorial + multi, candidate.get('score', 0))
+
     def consider(candidate):
-        nonlocal duplicates_rejected, pitchfork_only
+        nonlocal duplicates_rejected, pitchfork_only, single_specialist
         if len(chosen) >= MAX_TRACKS:
             return False
         if candidate.get('source_scores') and candidate.get('score', 0) < MIN_SCORE:
+            return False
+        sources = candidate.get('sources') or set()
+        if any(per_source[source] >= MAX_PER_SOURCE for source in sources):
+            return False
+        if sources == {'Pitchfork'} and pitchfork_only >= PITCHFORK_ONLY_CAP:
+            return False
+        if _is_single_specialist(candidate) and single_specialist >= SINGLE_SPECIALIST_CAP:
             return False
         resolved = _lookup(candidate)
         if resolved is None:
@@ -659,9 +811,6 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
                 continue
             if not passes_quality_gate(candidate, track, {'ids': known, 'pairs': catalog['pairs'], 'albums': catalog['albums']}, subgenre_counts):
                 continue
-            sources = candidate.get('sources') or set()
-            if sources == {'Pitchfork'} and pitchfork_only >= PITCHFORK_ONLY_CAP:
-                continue
             chosen.append((candidate, track))
             uris.append(track['uri'])
             per_artist[artist] += 1
@@ -673,8 +822,12 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
                 catalog['albums'].add(pair_key(artists[0]['name'], album_name))
             subgenre_counts[candidate.get('subgenre') or 'metal'] += 1
             buckets[candidate.get('bucket') or 'emerging'] += 1
+            for source in sources:
+                per_source[source] += 1
             if sources == {'Pitchfork'}:
                 pitchfork_only += 1
+            if _is_single_specialist(candidate):
+                single_specialist += 1
             added = True
             if candidate.get('kind') != 'album':
                 break
@@ -693,12 +846,17 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
             if not consider(candidate):
                 still.append(candidate)
         remaining = still
+    remaining.sort(key=_selection_priority, reverse=True)
     for candidate in remaining:
         if len(chosen) >= MAX_TRACKS:
             break
         consider(candidate)
     catalog['ids'] = known
-    return chosen, uris, known, {'duplicates_rejected': duplicates_rejected, 'buckets': dict(buckets)}
+    return chosen, uris, known, {
+        'duplicates_rejected': duplicates_rejected,
+        'buckets': dict(buckets),
+        'per_source': dict(per_source),
+    }
 
 
 def write_report(chosen, uris, stats):

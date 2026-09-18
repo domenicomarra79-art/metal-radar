@@ -22,6 +22,7 @@ from metal_radar import (
     candidates,
     diagnose_spotify,
     existing,
+    extract_pairs,
     playlist_ids,
     select_tracks,
     token,
@@ -319,6 +320,28 @@ class ScoringTests(unittest.TestCase):
             'authority': 8,
         }])
         self.assertEqual(junk, [])
+
+    def test_extracts_premiere_listen_and_italian_single_pairs(self):
+        self.assertEqual(
+            extract_pairs('Track Premiere: Vredensdal – “Consortium of Fools”'),
+            [('Vredensdal', 'Consortium of Fools')],
+        )
+        self.assertEqual(
+            extract_pairs('LISTEN: THE OCEAN Teams Up With TANGERINE DREAM For Cinematic "Milk of My Dreams"'),
+            [('THE OCEAN', 'Milk of My Dreams')],
+        )
+        self.assertEqual(
+            extract_pairs('Hear ARCHITECTs’ first song of 2026 “Machine”'),
+            [('ARCHITECTs', 'Machine')],
+        )
+        self.assertEqual(
+            extract_pairs('PEELINGFLESH Announce New Self-Titled Album with song "Murderous Intent"'),
+            [('PEELINGFLESH', 'Murderous Intent')],
+        )
+        self.assertEqual(
+            extract_pairs('LACRIMAS PROFUNDERE: il nuovo singolo “Faceless”'),
+            [('LACRIMAS PROFUNDERE', 'Faceless')],
+        )
 
     def test_rejects_german_and_italian_boilerplate_pairs(self):
         self.assertIsNone(valid_pair('Der Beitrag Ludgar', 'Violent Visions erschien zuerst'))

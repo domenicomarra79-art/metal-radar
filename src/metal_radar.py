@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,6 +59,38 @@ METAL = re.compile(
     re.I,
 )
 PAIR = re.compile(r'(?P<artist>[A-Z][^—–\-:|]{1,80})\s*[—–\-:]\s*["“\']?(?P<title>[^"”\'\n|]{2,100})')
+PREMIERE_PAIR = re.compile(
+    r'(?:Track Premiere|Video Premiere|Full(?: Album)? Stream)\s*[:—–-]\s*'
+    r'(?P<artist>[^–\—"“\']+?)\s*[–—\-:]\s*["“\']?(?P<title>[^"”\'\n]+)',
+    re.I,
+)
+MI_QUOTED_PAIR = re.compile(
+    r'(?:LISTEN|WATCH)\s*[:—–-]\s*'
+    r'(?P<artist>(?:[A-Z0-9][A-Z0-9.&\'’/-]*)(?:\s+(?:&|AND|THE|OF|[A-Z0-9][A-Z0-9.&\'’/-]*)){0,6})\b'
+    r'[^"“]{0,120}?["“](?P<title>[^"”]{2,80})["”]',
+)
+HEAR_QUOTED_PAIR = re.compile(
+    r'\bHear\s+(?P<artist>[A-Z][\w.&’/-]*(?:\s+[A-Z][\w.&’/-]*){0,3})[\'’]?s?\s+'
+    r'(?:first\s+|new\s+)?(?:album|song|single|track).{0,80}?["“‘](?P<title>[^"”’]{2,80})["”’]',
+)
+ANNOUNCE_QUOTED_PAIR = re.compile(
+    r'(?P<artist>[A-Z][A-Z0-9][A-Z0-9\s.&\'’/-]{0,40}?)\s+Announce\b[^"“]{0,100}?["“](?P<title>[^"”]{2,80})["”]',
+)
+IT_SINGLE_PAIR = re.compile(
+    r'^(?P<artist>[A-ZÀ-Ü0-9][^:]{1,60}?)\s*:\s*'
+    r'(?:il nuovo singolo|il video(?: del nuovo singolo)?(?: di)?|la nuova versione di)\s*'
+    r'["“](?P<title>[^"”]{2,80})["”]',
+    re.I,
+)
+METAL_NATIVE_SOURCES = {
+    'Decibel',
+    'Revolver',
+    'Metal Injection',
+    'Loudwire',
+    'Kerrang',
+    'Metalitalia',
+    'Metallus',
+}
 PLAYLIST_IN_URL = re.compile(r'(/playlists/)([^/?#]+)')
 REQUIRED_PLAYLIST_SCOPES = (
     'playlist-read-private',
@@ -71,8 +104,7 @@ NOISE = re.compile(
     r'der beitrag\b|erschien zuerst|l[\'’]articolo\b|black listed friday|'
     r'premiere des musikvideos|premiere der single|veröffentlichen|erhältlich|'
     r'cambio di location|una data al|live il\b|biglietti|dettagli dell|'
-    r'\bwatch\b|\blisten\b|enter now|full(?: album)? stream|video premiere|'
-    r'win a trip|share new version',
+    r'enter now|win a trip|share new version|album dal vivo|live at\b',
     re.I,
 )
 EDITORIAL = re.compile(
@@ -160,7 +192,7 @@ def articles():
             for entry in feed.entries:
                 date = published(entry)
                 title, text = clean_text(entry)
-                if not METAL.search(text):
+                if source not in METAL_NATIVE_SOURCES and not METAL.search(text):
                     continue
                 if NOSTALGIA.search(text) and not CURRENT.search(text):
                     continue
@@ -252,22 +284,50 @@ def score_candidate(item):
     }
 
 
+def extract_pairs(text):
+    pairs = []
+    for pattern in (PREMIERE_PAIR, MI_QUOTED_PAIR, HEAR_QUOTED_PAIR, ANNOUNCE_QUOTED_PAIR, IT_SINGLE_PAIR, PAIR):
+        for match in pattern.finditer(text or ''):
+            parsed = valid_pair(match.group('artist'), match.group('title'))
+            if parsed:
+                pairs.append(parsed)
+    unique = []
+    seen = set()
+    for artist, title in pairs:
+        key = (artist.lower(), title.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((artist, title))
+    return unique
+
+
 def valid_pair(artist, title):
-    artist = re.sub(r'\s+', ' ', artist).strip(' .,:"\'')
-    title = re.sub(r'\s+', ' ', title).strip(' .,:"\'')
+    artist = re.sub(r'\s+', ' ', artist).strip(' .,:"\'’')
+    title = re.sub(r'\s+', ' ', title).strip(' .,:"\'’')
     artist = re.sub(r'^(review|interview|news|album)\s*\]\s*', '', artist, flags=re.I)
+    artist = re.sub(r'[\'’]s$', '', artist).strip(' .,:"\'’')
+    title = re.sub(r'\s*[–—-]\s*$', '', title).strip()
+    if re.search(r'\breviews?\b|\bbehind\b|\bdigging deep\b|\btheir new\b', artist, re.I):
+        return None
+    if len(title.split()) > 8 and not re.search(r'[A-Za-z]', title[:20]):
+        return None
+    # Reject summary bleed where title still contains the artist name twice.
+    if len(title) > 40 and artist.lower() in title.lower()[len(artist):]:
+        return None
     if len(artist) < 2 or len(title) < 2 or len(artist) > 50 or len(title) > 70:
         return None
-    if len(artist.split()) > 5:
+    if len(artist.split()) > 6:
         return None
     if NOISE.search(artist) or NOISE.search(title):
         return None
-    if artist.lower() in {'metal', 'metal scene', 'news', 'review', 'album', 'premiere'}:
+    if artist.lower() in {'metal', 'metal scene', 'news', 'review', 'album', 'premiere', 'first look'}:
         return None
     if re.search(r'\*{2,}|f\*\*+', artist, re.I):
         return None
     if re.search(
-        r'^(watch|listen|read|enter|full|video|news|premiere|stream|welcome)\b',
+        r'^(watch|listen|read|enter|full|video|news|premiere|stream|welcome|hear|first look|'
+        r'photo credit|kenbassador)\b',
         artist,
         re.I,
     ):
@@ -290,7 +350,8 @@ def valid_pair(artist, title):
         r'\b(tour|concerto|biglietti|carroponte|intervista|location|musikvideos?|'
         r'veröffentlichen|erhältlich|physisch|single vom|zweite single|'
         r'win a trip|anybody living|month[- ]long|support act|nuovo singolo|'
-        r'rivelati i dettagli|neues video|szene gefeiert)\b|\b202[7-9]\b',
+        r'rivelati i dettagli|neues video|szene gefeiert|horror nights|'
+        r'barbie|mattel|use your illusion|photo credit)\b|\b202[7-9]\b|\b199[0-9]\b',
         title,
         re.I,
     ):
@@ -305,13 +366,9 @@ def valid_pair(artist, title):
 def candidates(items):
     grouped = {}
     for article in items:
-        blobs = [article['title'], article['text'][:400]]
+        blobs = [article['title'], article['text'][:500]]
         for blob in blobs:
-            for match in PAIR.finditer(blob):
-                parsed = valid_pair(match.group('artist'), match.group('title'))
-                if not parsed:
-                    continue
-                artist, title = parsed
+            for artist, title in extract_pairs(blob):
                 key = (artist.lower(), title.lower())
                 if key not in grouped:
                     grouped[key] = {
@@ -497,15 +554,22 @@ def diagnose_spotify(access, playlist, granted_scope):
 
 
 def _search(access, query, kind):
-    response = requests.get(
-        f'{SPOTIFY_API}/search',
-        headers=_auth_headers(access),
-        params={'q': query, 'type': kind, 'market': 'IT', 'limit': SEARCH_LIMIT},
-        timeout=30,
-    )
-    if not response.ok:
+    last_error = None
+    for attempt in range(3):
+        response = requests.get(
+            f'{SPOTIFY_API}/search',
+            headers=_auth_headers(access),
+            params={'q': query, 'type': kind, 'market': 'IT', 'limit': SEARCH_LIMIT},
+            timeout=30,
+        )
+        if response.ok:
+            return response.json()
+        if response.status_code in {502, 503, 504} and attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+            last_error = response
+            continue
         raise _spotify_error('search', response)
-    return response.json()
+    raise _spotify_error('search', last_error)
 
 
 def search(access, artist, title):

@@ -1,12 +1,25 @@
 SOURCES = {
     'Pitchfork': {
         'tier': 1,
-        'authority': 8,
+        'authority': 9,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'quality',
         'feeds': [
-            'https://pitchfork.com/feed/feed-news/rss',
+            # Prefer album reviews over homepage news.
             'https://pitchfork.com/feed/feed-album-reviews/rss',
+            'https://pitchfork.com/feed/feed-news/rss',
+        ],
+    },
+    'Angry Metal Guy': {
+        'tier': 1,
+        'authority': 10,
+        'region': 'US',
+        'kind': 'editorial',
+        'role': 'quality',
+        'feeds': [
+            'https://www.angrymetalguy.com/category/reviews/feed/',
+            'https://www.angrymetalguy.com/feed/',
         ],
     },
     'Decibel': {
@@ -14,6 +27,7 @@ SOURCES = {
         'authority': 10,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'quality',
         'feeds': ['https://www.decibelmagazine.com/feed/'],
     },
     'Revolver': {
@@ -21,22 +35,25 @@ SOURCES = {
         'authority': 8,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'discovery',
         'feeds': ['https://www.revolvermag.com/feed/'],
     },
     'Metal Injection': {
         'tier': 1,
-        'authority': 8,
+        'authority': 7,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'discovery',
         'feeds': [
             'https://metalinjection.net/feed/',
         ],
     },
     'Loudwire': {
         'tier': 1,
-        'authority': 7,
+        'authority': 6,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'discovery',
         'feeds': ['https://loudwire.com/feed/'],
     },
     'Stereogum': {
@@ -44,6 +61,7 @@ SOURCES = {
         'authority': 7,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'quality',
         'feeds': ['https://www.stereogum.com/feed/'],
     },
     'Consequence': {
@@ -51,6 +69,7 @@ SOURCES = {
         'authority': 7,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'discovery',
         'feeds': ['https://consequence.net/feed/'],
     },
     'BrooklynVegan': {
@@ -58,13 +77,15 @@ SOURCES = {
         'authority': 6,
         'region': 'US',
         'kind': 'editorial',
+        'role': 'discovery',
         'feeds': ['https://www.brooklynvegan.com/feed/'],
     },
     'Kerrang': {
         'tier': 1,
-        'authority': 9,
+        'authority': 8,
         'region': 'UK',
         'kind': 'editorial',
+        'role': 'quality',
         'feeds': [
             'https://www.kerrang.com/feed',
             'https://www.kerrang.com/feed.rss',
@@ -75,16 +96,19 @@ SOURCES = {
         'authority': 8,
         'region': 'UK',
         'kind': 'editorial',
+        'role': 'quality',
         'feeds': [
-            'https://www.loudersound.com/rss',
+            # Prefer Metal Hammer / Louder metal coverage.
             'https://www.loudersound.com/metal-hammer/feed',
+            'https://www.loudersound.com/rss',
         ],
     },
     'The Quietus': {
         'tier': 1,
-        'authority': 8,
+        'authority': 9,
         'region': 'UK',
         'kind': 'editorial',
+        'role': 'quality',
         'feeds': ['https://thequietus.com/feed/'],
     },
     'Metalitalia': {
@@ -92,6 +116,7 @@ SOURCES = {
         'authority': 8,
         'region': 'IT',
         'kind': 'specialist',
+        'role': 'regional',
         'feeds': ['https://metalitalia.com/feed/'],
     },
     'Metallus': {
@@ -99,6 +124,7 @@ SOURCES = {
         'authority': 6,
         'region': 'IT',
         'kind': 'specialist',
+        'role': 'regional',
         'feeds': ['https://metallus.it/feed'],
     },
 }
@@ -124,3 +150,8 @@ SUBGENRES = (
     'avant-garde metal',
     'experimental metal',
 )
+
+QUALITY_SOURCES = {name for name, cfg in SOURCES.items() if cfg.get('role') == 'quality'}
+DISCOVERY_SOURCES = {name for name, cfg in SOURCES.items() if cfg.get('role') == 'discovery'}
+REGIONAL_SOURCES = {name for name, cfg in SOURCES.items() if cfg.get('role') == 'regional'}
+METAL_NATIVE_SOURCES = set(SOURCES)  # all current outlets are metal-native or metal-focused

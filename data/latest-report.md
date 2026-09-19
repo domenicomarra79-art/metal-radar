@@ -1,72 +1,126 @@
-# Metal Radar — 2026-09-19 07:49 CEST
+# Metal Radar — 2026-09-19 08:15 CEST
 
 Playlist: METAL RADAR
-NEW TRACKS THIS WEEK: 9
-TOTAL PLAYLIST TRACKS: 41
-DUPLICATES REJECTED: 2
-SOURCES CONSULTED: Pitchfork, Decibel, Revolver, Metal Injection, Loudwire, Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, Metalitalia, Metallus
+NEW TRACKS THIS WEEK: 11
+TOTAL PLAYLIST TRACKS: 52
+DUPLICATES REJECTED: 7
+SOURCES CONSULTED: Pitchfork, Angry Metal Guy, Decibel, Revolver, Metal Injection, Loudwire, Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, Metalitalia, Metallus
 
 ## NEW TRACKS ADDED
 
-1. **Vredensdal — Consortium Of Fools**
-   Album: Consortium Of Fools
+1. **Anthrax — Cursum Perficio**
+   Album: Cursum Perficio
+   Type: review
+   Subgenre: metal
+   Score: 70
+   Rating: AMG 3.5/5.0
+   Body read: true
+   Why: AMG 3.5/5.0 review highlight via Angry Metal Guy, Metal Injection, Metalitalia, Revolver
+   Sources: Angry Metal Guy, Metal Injection, Metalitalia, Revolver
+
+2. **Early Moods — Ready For The Grave**
+   Album: Ready For The Grave
+   Type: review
+   Subgenre: metal
+   Score: 70
+   Rating: AMG 3.5/5.0
+   Body read: true
+   Why: AMG 3.5/5.0 review highlight via Angry Metal Guy
+   Sources: Angry Metal Guy
+
+3. **Grey Shores — Herald the Dark**
+   Album: Dark Waters of Night
+   Type: review
    Subgenre: black metal
-   Score: 87
-   Why: Score 87; emerging pick via Decibel.
+   Score: 61
+   Rating: AMG 3.0/5.0
+   Body read: true
+   Why: AMG 3.0/5.0 review highlight via Angry Metal Guy
+   Sources: Angry Metal Guy
+
+4. **Shades of Wellness — Wellness**
+   Album: Massage Music - Ayurvedic Massage Relaxing Music for Wellness Center and Spa
+   Type: premiere
+   Subgenre: black metal
+   Score: 44
+   Rating: n/a
+   Body read: true
+   Why: premiere fill via Decibel
    Sources: Decibel
 
-2. **Medical Negligence — Rey Chivo**
-   Album: Rey Chivo
-   Subgenre: death metal
-   Score: 87
-   Why: Score 87; emerging pick via Decibel.
+5. **Materializer — Unwind**
+   Album: Unwind
+   Type: premiere
+   Subgenre: doom metal
+   Score: 44
+   Rating: n/a
+   Body read: true
+   Why: premiere fill via Decibel
    Sources: Decibel
 
-3. **The Ocean — Milk Of My Dreams**
-   Album: Milk Of My Dreams
+6. **ROSÉ — new trick**
+   Album: new trick
+   Type: news
    Subgenre: metal
-   Score: 87
-   Why: Score 87; emerging pick via Metal Injection, Metalitalia.
-   Sources: Metal Injection, Metalitalia
-
-4. **Molly McGuire — Take Me Home**
-   Album: Take Me Home
-   Subgenre: metal
-   Score: 84
-   Why: Score 84; emerging pick via Decibel.
-   Sources: Decibel
-
-5. **Justifications — Urge to Kill**
-   Album: Urge to Kill
-   Subgenre: metal
-   Score: 77
-   Why: Score 77; emerging pick via Metal Injection.
-   Sources: Metal Injection
-
-6. **Lacrimas Profundere — Faceless**
-   Album: Faceless
-   Subgenre: metal
-   Score: 95
-   Why: Score 95; european pick via Metalitalia, Metallus.
-   Sources: Metalitalia, Metallus
-
-7. **Revocation — Data Corpse**
-   Album: New Gods, New Masters
-   Subgenre: metal
-   Score: 77
-   Why: Score 77; emerging pick via Metal Injection.
-   Sources: Metal Injection
-
-8. **Letterbombs — I'm Not Here To Enjoy My Life**
-   Album: I'm Not Here To Enjoy My Life
-   Subgenre: metal
-   Score: 75
-   Why: Score 75; emerging pick via Stereogum.
+   Score: 40
+   Rating: n/a
+   Body read: true
+   Why: Score 40; news via Stereogum
    Sources: Stereogum
 
-9. **Celestial Scourge — Foreseen Systematic Malfunctions**
-   Album: Foreseen Systematic Malfunctions
-   Subgenre: death metal
-   Score: 68
-   Why: Score 68; european pick via Metalitalia.
+7. **Curly Castro — Black Don't Crack**
+   Album: Yaphet
+   Type: premiere
+   Subgenre: metal
+   Score: 40
+   Rating: n/a
+   Body read: true
+   Why: premiere fill via Stereogum
+   Sources: Stereogum
+
+8. **Strange Pains — Lucifer Disguised**
+   Album: Lucifer Disguised
+   Type: news
+   Subgenre: metal
+   Score: 40
+   Rating: n/a
+   Body read: true
+   Why: Score 40; news via Stereogum
+   Sources: Stereogum
+
+9. **Oasis — Don't Look Back In Anger**
+   Album: (What's The Story) Morning Glory?
+   Type: news
+   Subgenre: metal
+   Score: 40
+   Rating: n/a
+   Body read: true
+   Why: Score 40; news via Louder
+   Sources: Louder
+
+10. **The Number Twelve Looks Like You — Glow In The Dark Skin**
+   Album: Glow In The Dark Skin
+   Type: premiere
+   Subgenre: progressive metal
+   Score: 40
+   Rating: n/a
+   Body read: true
+   Why: premiere fill via Metalitalia
    Sources: Metalitalia
+
+11. **Evil Invaders — Dreamstate - Single Version**
+   Album: Dreamstate
+   Type: premiere
+   Subgenre: heavy metal
+   Score: 40
+   Rating: n/a
+   Body read: true
+   Why: premiere fill via Metalitalia
+   Sources: Metalitalia
+
+## REJECTED NEGATIVE REVIEWS
+
+- Aesop Rock and Blockhead Reveal Next Joint Album (Pitchfork; qualitative negative)
+- Stuck in the Filter: June 2026’s Angry Misses (Angry Metal Guy; qualitative negative)
+- Wyrdstæf – Primordial Bloodlines Review (Angry Metal Guy; AMG 2.0/5.0)
+- Cool new prog from Steven Wilson, The Pineapple Thief, Kalandra and more in Prog's brand new Tracks Of The Week (Louder; qualitative negative)

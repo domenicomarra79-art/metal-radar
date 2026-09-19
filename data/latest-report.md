@@ -1,100 +1,72 @@
-# Metal Radar — 2026-09-18 12:35 CEST
+# Metal Radar — 2026-09-19 07:49 CEST
 
-Playlist: METAL RADAR — 2026
-NEW TRACKS THIS WEEK: 13
-TOTAL PLAYLIST TRACKS: 32
-DUPLICATES REJECTED: 0
-SOURCES CONSULTED: Pitchfork, Revolver, Metal Injection, Loudwire, Stereogum, Consequence, BrooklynVegan, Louder, The Quietus, Metal.de, Metalitalia, TrueMetal, Metallus, Blabbermouth
+Playlist: METAL RADAR
+NEW TRACKS THIS WEEK: 9
+TOTAL PLAYLIST TRACKS: 41
+DUPLICATES REJECTED: 2
+SOURCES CONSULTED: Pitchfork, Decibel, Revolver, Metal Injection, Loudwire, Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, Metalitalia, Metallus
 
 ## NEW TRACKS ADDED
 
-1. **Ludgar — Violent Visions (In the Claws of Ergot)**
-   Album: Violent Visions (In the Claws of Ergot)
+1. **Vredensdal — Consortium Of Fools**
+   Album: Consortium Of Fools
    Subgenre: black metal
-   Score: 86
-   Why: Score 86; european pick via Metal.de.
-   Sources: Metal.de
+   Score: 87
+   Why: Score 87; emerging pick via Decibel.
+   Sources: Decibel
 
-2. **Anthrax — Persistence of Memory**
-   Album: Cursum Perficio
-   Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
+2. **Medical Negligence — Rey Chivo**
+   Album: Rey Chivo
+   Subgenre: death metal
+   Score: 87
+   Why: Score 87; emerging pick via Decibel.
+   Sources: Decibel
 
-3. **Bloodstains — The Last Rites**
-   Album: Bloodstains
+3. **The Ocean — Milk Of My Dreams**
+   Album: Milk Of My Dreams
    Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
+   Score: 87
+   Why: Score 87; emerging pick via Metal Injection, Metalitalia.
+   Sources: Metal Injection, Metalitalia
 
-4. **Gates of Celestia — Six Sigils**
-   Album: Six Sigils
+4. **Molly McGuire — Take Me Home**
+   Album: Take Me Home
    Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
+   Score: 84
+   Why: Score 84; emerging pick via Decibel.
+   Sources: Decibel
 
-5. **Fejd — Nifelheim**
-   Album: Nifelheim
+5. **Justifications — Urge to Kill**
+   Album: Urge to Kill
    Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
+   Score: 77
+   Why: Score 77; emerging pick via Metal Injection.
+   Sources: Metal Injection
 
-6. **PRESIDENT — Angel Wings**
-   Album: Blood Of Your Empire
+6. **Lacrimas Profundere — Faceless**
+   Album: Faceless
    Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
+   Score: 95
+   Why: Score 95; european pick via Metalitalia, Metallus.
+   Sources: Metalitalia, Metallus
 
-7. **Dekadenza — Wasteland**
-   Album: Wasteland
+7. **Revocation — Data Corpse**
+   Album: New Gods, New Masters
    Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
+   Score: 77
+   Why: Score 77; emerging pick via Metal Injection.
+   Sources: Metal Injection
 
-8. **Ashbury — The Warning**
-   Album: Endless Skies
+8. **Letterbombs — I'm Not Here To Enjoy My Life**
+   Album: I'm Not Here To Enjoy My Life
    Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
+   Score: 75
+   Why: Score 75; emerging pick via Stereogum.
+   Sources: Stereogum
 
-9. **North Sea Echoes — A Time of Innocence and Purpose**
-   Album: How to Cast a Shadow
-   Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
-
-10. **Wyrdstæf — White Spring**
-   Album: Primordial Bloodlines
-   Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
-
-11. **Playgrounded — A Flower...**
-   Album: A Flower To Water
-   Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metal.de.
-   Sources: Metal.de
-
-12. **Memories of a Lost Soul — Five Centimeters to Suicide**
-   Album: Lost Memories
-   Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metalitalia.
-   Sources: Metalitalia
-
-13. **The Bleeding — Godless Communion**
-   Album: Godless Communion
-   Subgenre: metal
-   Score: 83
-   Why: Score 83; european pick via Metalitalia.
+9. **Celestial Scourge — Foreseen Systematic Malfunctions**
+   Album: Foreseen Systematic Malfunctions
+   Subgenre: death metal
+   Score: 68
+   Why: Score 68; european pick via Metalitalia.
    Sources: Metalitalia

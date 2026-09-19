@@ -660,6 +660,20 @@ def add(access, playlist, uris):
         raise _spotify_error('playlist add', response)
 
 
+def update_playlist_profile(access, playlist):
+    """Keep Spotify name/description pinned to the fixed identity."""
+    url = f'{SPOTIFY_API}/playlists/{playlist}'
+    response = requests.put(
+        url,
+        headers={**_auth_headers(access), 'Content-Type': 'application/json'},
+        json={'name': PLAYLIST_NAME, 'description': PLAYLIST_DESCRIPTION},
+        timeout=30,
+    )
+    _log_spotify_call('playlist profile', 'PUT', url, response)
+    if not response.ok:
+        raise _spotify_error('playlist profile', response)
+
+
 def playlist_entry(item):
     if not isinstance(item, dict):
         return None
@@ -898,6 +912,7 @@ def main():
     if len(chosen) < MIN_TRACKS:
         print(f'Selection below target ({len(chosen)} < {MIN_TRACKS}); adding only vetted tracks')
     add(access, playlist, uris)
+    update_playlist_profile(access, playlist)
     playlist_total = len(catalog['ids'] | known)
     history['tracks'] = sorted(tid for tid in known if tid)
     history['pairs'] = sorted('|'.join(pair) for pair in catalog['pairs'] if pair[0] and pair[1])

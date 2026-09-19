@@ -90,6 +90,33 @@ class TokenTests(unittest.TestCase):
         self.assertNotIn('test-refresh-token', message)
 
 
+class PlaylistIdentityTests(unittest.TestCase):
+    def test_playlist_identity_is_fixed(self):
+        from metal_radar import PLAYLIST_DESCRIPTION, PLAYLIST_NAME
+        self.assertEqual(PLAYLIST_NAME, 'METAL RADAR')
+        self.assertEqual(
+            PLAYLIST_DESCRIPTION,
+            'The essential metal radar. New riffs, heavy sounds and future classics — '
+            'curated weekly from the best metal press',
+        )
+
+    @patch('metal_radar.requests.put')
+    def test_update_playlist_profile_sends_fixed_identity(self, put):
+        from metal_radar import update_playlist_profile
+        response = MagicMock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {}
+        put.return_value = response
+        update_playlist_profile('token', 'playlist-id')
+        self.assertEqual(put.call_args.kwargs['json']['name'], 'METAL RADAR')
+        self.assertEqual(
+            put.call_args.kwargs['json']['description'],
+            'The essential metal radar. New riffs, heavy sounds and future classics — '
+            'curated weekly from the best metal press',
+        )
+
+
 class SelectionTests(unittest.TestCase):
     def test_skips_duplicate_spotify_ids(self):
         ranked = [

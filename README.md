@@ -6,10 +6,10 @@ Metal Radar is a weekly editorial playlist builder for Spotify. Every Friday it 
 
 ## What it does
 
-1. **Scans the press** — Pitchfork, Decibel, Revolver, Metal Injection, Loudwire, Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, The Quietus, Metalitalia, Metallus
-2. **Extracts real releases** — premieres, singles, and album tracks from headlines (not tour noise, giveaways, or boilerplate)
-3. **Scores and ranks** — authority, multi-source consensus, and editorial signals beat single-site dumps
-4. **Updates Spotify** — up to 15 new tracks a week, deduped against playlist history, with hard caps so one outlet never takes over
+1. **Scans the press** — Pitchfork, Angry Metal Guy, Decibel, Revolver, Metal Injection, Loudwire, Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, The Quietus, Metalitalia, Metallus
+2. **Prefers reviews** — reads review bodies for ratings and standout tracks; premieres only fill leftover slots
+3. **Scores and ranks** — quality-source ratings and multi-review consensus beat single-site LISTEN/WATCH dumps
+4. **Updates Spotify** — up to 15 new tracks a week, deduped against playlist history, with hard caps so discovery outlets never take over
 
 Runs automatically via GitHub Actions every **Friday at 01:00 Europe/Rome** (or on demand with `workflow_dispatch`).
 

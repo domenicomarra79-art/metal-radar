@@ -11,9 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 from metal_radar import (
     MAX_PER_ARTIST,
-    MAX_PER_SOURCE,
+    MAX_PER_SOURCE_DISCOVERY,
     MAX_TRACKS,
-    SINGLE_SPECIALIST_CAP,
+    PREMIERE_SCORE_CAP,
+    SINGLE_DISCOVERY_CAP,
     SPOTIFY_TOKEN_URL,
     _mask_id,
     _redact_endpoint,
@@ -23,7 +24,11 @@ from metal_radar import (
     diagnose_spotify,
     existing,
     extract_pairs,
+    extract_review_album,
+    parse_rating,
+    parse_sentiment,
     playlist_ids,
+    resolve_candidate,
     select_tracks,
     token,
     valid_pair,
@@ -312,28 +317,174 @@ class DiagnosticTests(unittest.TestCase):
 
 
 class ScoringTests(unittest.TestCase):
-    def _article(self, source, link, authority=8, kind='editorial', region='US'):
+    def _article(
+        self,
+        source,
+        link,
+        authority=8,
+        kind='editorial',
+        region='US',
+        role='discovery',
+        item_type='premiere',
+        title='Iron Tomb — Black Halo',
+        text=None,
+        rating=None,
+        rating_label=None,
+        highlight='',
+        sentiment='positive',
+        body_read=False,
+    ):
         return {
             'source': source,
-            'title': 'Iron Tomb — Black Halo',
+            'title': title,
             'link': link,
-            'text': 'Iron Tomb — Black Halo death metal premiere album of the week',
+            'text': text or f'{title} death metal premiere album of the week',
+            'body': text or '',
             'published': datetime.now(timezone.utc).isoformat(),
             'region': region,
             'kind': kind,
             'authority': authority,
+            'role': role,
+            'item_type': item_type,
+            'rating': rating,
+            'rating_label': rating_label,
+            'highlight': highlight,
+            'sentiment': sentiment,
+            'body_read': body_read,
         }
 
+    def test_amg_review_outranks_mi_listen_premiere(self):
+        ranked = candidates([
+            self._article(
+                'Angry Metal Guy',
+                'https://example.com/amg',
+                authority=10,
+                role='quality',
+                item_type='review',
+                title='Iron Tomb — Black Halo Review',
+                text='Iron Tomb Black Halo Rating: 4.0 standout "Obsidian Crown" shines',
+                rating=0.8,
+                rating_label='AMG 4.0/5.0',
+                highlight='Obsidian Crown',
+                body_read=True,
+            ),
+            self._article(
+                'Metal Injection',
+                'https://example.com/mi',
+                authority=7,
+                role='discovery',
+                item_type='premiere',
+                title='LISTEN: OTHER BAND Drops "Different Song"',
+                text='LISTEN: OTHER BAND Drops "Different Song" metal premiere',
+            ),
+        ])
+        by_artist = {item['artist'].lower(): item for item in ranked}
+        self.assertIn('iron tomb', by_artist)
+        self.assertIn('other band', by_artist)
+        self.assertGreater(by_artist['iron tomb']['score'], by_artist['other band']['score'])
+        self.assertGreaterEqual(by_artist['iron tomb']['score'], 70)
+        self.assertLessEqual(by_artist['other band']['score'], PREMIERE_SCORE_CAP)
+
+    def test_negative_review_is_dropped(self):
+        ranked = candidates([
+            self._article(
+                'Angry Metal Guy',
+                'https://example.com/bad',
+                authority=10,
+                role='quality',
+                item_type='review',
+                title='Dull Band — Filler Album Review',
+                text='This is a disappointment. Rating: 1.5',
+                rating=0.3,
+                rating_label='AMG 1.5/5.0',
+                sentiment='negative',
+                body_read=True,
+            ),
+        ])
+        self.assertEqual(ranked, [])
+
+    def test_album_review_without_highlight_does_not_dump_three_tracks(self):
+        candidate = {
+            'artist': 'Iron Tomb',
+            'title': 'Black Halo',
+            'album': 'Black Halo',
+            'kind': 'album',
+            'primary_type': 'review',
+            'review_sources': {'Angry Metal Guy'},
+            'highlights': set(),
+            'score': 88,
+            'sources': {'Angry Metal Guy'},
+            'roles': {'quality'},
+            'kinds': {'editorial'},
+            'source_scores': {'rating': 32},
+            'subgenre': 'death metal',
+        }
+        album_tracks = [
+            track('a', 'Iron Tomb', 'One'),
+            track('b', 'Iron Tomb', 'Two'),
+            track('c', 'Iron Tomb', 'Three'),
+        ]
+        with patch('metal_radar.search', return_value=None), patch(
+            'metal_radar.album_named_track', return_value=None
+        ):
+            # No highlight and album-name search fails => empty, not 3 tracks.
+            resolved = resolve_candidate('token', candidate)
+        self.assertEqual(resolved, [])
+
+        # Even if a mistaken list were returned, select_tracks album limit is 1.
+        chosen, uris, _known, _extra = select_tracks(
+            [candidate],
+            set(),
+            lambda _candidate: album_tracks,
+        )
+        self.assertEqual(len(chosen), 1)
+        self.assertEqual(len(uris), 1)
+
+    def test_two_premieres_are_not_review_consensus(self):
+        ranked = candidates([
+            self._article(
+                'Metal Injection',
+                'https://example.com/mi1',
+                role='discovery',
+                item_type='premiere',
+                title='LISTEN: Iron Tomb Drops "Black Halo"',
+                text='LISTEN: Iron Tomb Drops "Black Halo" metal',
+            ),
+            self._article(
+                'Revolver',
+                'https://example.com/rev',
+                role='discovery',
+                item_type='premiere',
+                title='Hear Iron Tomb new song "Black Halo"',
+                text='Hear Iron Tomb new song "Black Halo" metal',
+            ),
+        ])
+        self.assertTrue(ranked)
+        self.assertFalse(ranked[0].get('review_sources'))
+        self.assertLessEqual(ranked[0]['score'], PREMIERE_SCORE_CAP)
+
+    def test_parse_amg_rating_and_sentiment(self):
+        rating, label = parse_rating('Angry Metal Guy', 'Some text Rating: 4.0 more')
+        self.assertEqual(rating, 0.8)
+        self.assertIn('4.0', label)
+        self.assertEqual(parse_sentiment(0.3, 'a disappointment'), 'negative')
+        self.assertEqual(parse_sentiment(0.8, 'highly recommended'), 'positive')
+
+    def test_extract_review_album_headline(self):
+        self.assertEqual(
+            extract_review_album('Anthrax – Cursum Perficio Review'),
+            ('Anthrax', 'Cursum Perficio'),
+        )
+
     def test_multiple_publications_outrank_a_single_source(self):
-        one = candidates([self._article('Pitchfork', 'https://example.com/p')])
+        one = candidates([self._article('Pitchfork', 'https://example.com/p', role='quality', item_type='review')])
         many = candidates([
-            self._article('Pitchfork', 'https://example.com/p'),
-            self._article('Revolver', 'https://example.com/r', authority=8),
-            self._article('Louder', 'https://example.com/l', authority=8, region='UK'),
+            self._article('Pitchfork', 'https://example.com/p', role='quality', item_type='review', rating=0.8, rating_label='8.0/10'),
+            self._article('Decibel', 'https://example.com/d', authority=10, role='quality', item_type='review', rating=0.8),
+            self._article('Louder', 'https://example.com/l', authority=8, region='UK', role='quality', item_type='review'),
         ])
         self.assertGreater(many[0]['score'], one[0]['score'])
         self.assertGreaterEqual(many[0]['score'], 40)
-        self.assertEqual(sorted(many[0]['source_publications']), ['Louder', 'Pitchfork', 'Revolver'])
 
     def test_rejects_feed_boilerplate_pairs(self):
         junk = candidates([{
@@ -345,6 +496,10 @@ class ScoringTests(unittest.TestCase):
             'region': 'US',
             'kind': 'editorial',
             'authority': 8,
+            'role': 'discovery',
+            'item_type': 'premiere',
+            'sentiment': 'positive',
+            'body_read': False,
         }])
         self.assertEqual(junk, [])
 
@@ -383,62 +538,52 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(valid_pair('Ludgar', 'Violent Visions'), ('Ludgar', 'Violent Visions'))
         self.assertEqual(valid_pair('Letterbombs', "I'm Not Here To Enjoy My Life"), ('Letterbombs', "I'm Not Here To Enjoy My Life"))
 
-    def test_single_specialist_source_is_capped_below_editorial(self):
-        specialist = candidates([self._article('Wire Dump', 'https://example.com/m', kind='wire', region='US', authority=6)])
-        editorial = candidates([
-            self._article('Pitchfork', 'https://example.com/p'),
-            self._article('Revolver', 'https://example.com/r', authority=8),
+    def test_discovery_only_score_cannot_exceed_premiere_cap(self):
+        ranked = candidates([
+            self._article(
+                'Metal Injection',
+                'https://example.com/mi',
+                authority=10,
+                role='discovery',
+                item_type='premiere',
+                title='LISTEN: HUGE BAND Drops "Huge Song"',
+                text='LISTEN: HUGE BAND Drops "Huge Song" essential exclusive premiere metal',
+            ),
         ])
-        self.assertLessEqual(specialist[0]['score'], 70)
-        self.assertGreater(editorial[0]['score'], specialist[0]['score'])
+        self.assertTrue(ranked)
+        self.assertLessEqual(ranked[0]['score'], PREMIERE_SCORE_CAP)
 
-    def test_max_tracks_per_source_and_single_specialist_cap(self):
+    def test_max_tracks_per_discovery_source_cap(self):
         ranked = []
         catalog = {}
         for index in range(8):
-            artist = f'Wire Band {index}'
+            artist = f'MI Band {index}'
             title = 'Song'
             ranked.append({
                 'artist': artist,
                 'title': title,
-                'score': 80 - index,
-                'sources': {'Wire Dump'},
-                'kinds': {'wire'},
-                'source_publications': ['Wire Dump'],
-                'bucket': 'underground',
+                'score': 55,
+                'sources': {'Metal Injection'},
+                'roles': {'discovery'},
+                'kinds': {'editorial'},
+                'review_sources': set(),
+                'primary_type': 'premiere',
+                'source_publications': ['Metal Injection'],
+                'bucket': 'emerging',
                 'subgenre': 'black metal',
                 'kind': 'track',
                 'source_scores': {'quality': 20},
+                'highlights': set(),
             })
-            catalog[(artist, title)] = track(f'wd-{index}', artist, title)
-        for index in range(5):
-            artist = f'Editorial Band {index}'
-            title = 'Song'
-            ranked.append({
-                'artist': artist,
-                'title': title,
-                'score': 88 - index,
-                'sources': {'Revolver'},
-                'kinds': {'editorial'},
-                'source_publications': ['Revolver'],
-                'bucket': 'emerging',
-                'subgenre': 'death metal',
-                'kind': 'track',
-                'source_scores': {'quality': 30},
-            })
-            catalog[(artist, title)] = track(f'ed-{index}', artist, title)
+            catalog[(artist, title)] = track(f'mi-{index}', artist, title)
         chosen, uris, _known, extra = select_tracks(
             ranked,
             set(),
             lambda artist, title: catalog[(artist, title)],
         )
-        wire = sum(1 for candidate, _track in chosen if candidate['sources'] == {'Wire Dump'})
-        revolver = sum(1 for candidate, _track in chosen if 'Revolver' in candidate['sources'])
-        self.assertLessEqual(wire, SINGLE_SPECIALIST_CAP)
-        self.assertLessEqual(revolver, MAX_PER_SOURCE)
-        self.assertGreaterEqual(revolver, 1)
+        self.assertLessEqual(len(chosen), SINGLE_DISCOVERY_CAP)
+        self.assertLessEqual(extra['per_source'].get('Metal Injection', 0), MAX_PER_SOURCE_DISCOVERY)
         self.assertEqual(len(uris), len(chosen))
-        self.assertLessEqual(extra['per_source'].get('Wire Dump', 0), MAX_PER_SOURCE)
 
     def test_pitchfork_does_not_dominate_selection(self):
         ranked = []
@@ -451,12 +596,16 @@ class ScoringTests(unittest.TestCase):
                 'title': title,
                 'score': 90 - index,
                 'sources': {'Pitchfork'},
+                'roles': {'quality'},
                 'kinds': {'editorial'},
+                'review_sources': {'Pitchfork'},
+                'primary_type': 'review',
                 'source_publications': ['Pitchfork'],
                 'bucket': 'established',
                 'subgenre': 'death metal',
                 'kind': 'track',
                 'source_scores': {'quality': 30},
+                'highlights': set(),
             })
             catalog[(artist, title)] = track(f'pf-{index}', artist, title)
         chosen, uris, _known, _extra = select_tracks(

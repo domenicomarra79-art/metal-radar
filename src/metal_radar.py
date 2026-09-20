@@ -76,7 +76,21 @@ METAL = re.compile(
     r'black metal|death metal|heavy metal|riff|grind|djent|screamo',
     re.I,
 )
-PAIR = re.compile(r'(?P<artist>[A-Z][^—–\-:|]{1,80})\s*[—–\-:]\s*["“\']?(?P<title>[^"”\'\n|]{2,100})')
+# Block Britpop / K-pop / spa-adjacent headline noise that leaks via generalist feeds.
+NON_METAL_ARTISTS = re.compile(
+    r'^(oasis|noel gallagher|liam gallagher|ros[eé]|taylor swift|billie eilish|'
+    r'drake|the beatles|coldplay|ed sheeran|ariana grande|dua lipa|'
+    r'shades of wellness)$',
+    re.I,
+)
+NON_METAL_SPOTIFY = re.compile(
+    r'\b(massage|spa|ayurvedic|relaxing music|wellness center|yoga|meditation|'
+    r'sleep music|white noise|nature sounds|pianoforte rilassante)\b',
+    re.I,
+)
+PAIR = re.compile(
+    r'(?P<artist>[A-Z][^—–\-:|]{1,80})\s*[—–\-:]\s*["“]?(?P<title>[^"”\n|]{2,100})'
+)
 PREMIERE_PAIR = re.compile(
     r'(?:Track Premiere|Video Premiere|Full(?: Album)? Stream)\s*[:—–-]\s*'
     r'(?P<artist>[^–\—"“\']+?)\s*[–—\-:]\s*["“\']?(?P<title>[^"”\'\n]+)',
@@ -282,12 +296,7 @@ def articles():
                 date = published(entry)
                 title, text, body = clean_text(entry)
                 item_type = classify_item_type(title, text, source, role)
-                metal_ok = (
-                    source in METAL_NATIVE_SOURCES
-                    or role == 'quality'
-                    or item_type in {'review', 'list'}
-                    or METAL.search(text)
-                )
+                metal_ok = source in METAL_NATIVE_SOURCES or bool(METAL.search(text))
                 if not metal_ok:
                     continue
                 if NOSTALGIA.search(text) and not CURRENT.search(text):
@@ -508,6 +517,10 @@ def valid_pair(artist, title):
     if NOISE.search(artist) or NOISE.search(title):
         return None
     if artist.lower() in {'metal', 'metal scene', 'news', 'review', 'album', 'premiere', 'first look'}:
+        return None
+    if NON_METAL_ARTISTS.search(artist):
+        return None
+    if NON_METAL_SPOTIFY.search(f'{artist} {title}'):
         return None
     if re.search(r'\*{2,}|f\*\*+', artist, re.I):
         return None
@@ -890,14 +903,32 @@ def _search(access, query, kind):
     raise _spotify_error('search', last_error)
 
 
+def _spotify_match_ok(track, artist, title):
+    if not track or not track.get('id'):
+        return False
+    names = ' '.join(a.get('name') or '' for a in track.get('artists') or [])
+    track_name = track.get('name') or ''
+    album_name = ((track.get('album') or {}).get('name') or '')
+    blob = f'{names} {track_name} {album_name}'
+    if NON_METAL_SPOTIFY.search(blob):
+        return False
+    if NON_METAL_ARTISTS.search((names.split(',')[0] if names else artist).strip()):
+        return False
+    if artist.lower() not in names.lower():
+        return False
+    if title.lower() not in track_name.lower():
+        return False
+    return True
+
+
 def search(access, artist, title):
     payload = _search(access, f'track:{title} artist:{artist}', 'track')
-    tracks = payload.get('tracks', {}).get('items', [])
+    tracks = payload.get('tracks', {}).get('items', []) or []
     for track in tracks:
-        names = ' '.join(a['name'] for a in track.get('artists', []))
-        if artist.lower() in names.lower() and title.lower() in track['name'].lower():
+        if _spotify_match_ok(track, artist, title):
             return track
-    return tracks[0] if tracks else None
+    # Never fall back to an unmatched first hit (spa/pop false positives).
+    return None
 
 
 def album_named_track(access, artist, album, track_name):
@@ -906,10 +937,12 @@ def album_named_track(access, artist, album, track_name):
     album_obj = None
     for item in albums:
         names = ' '.join(a['name'] for a in item.get('artists', []))
-        if artist.lower() in names.lower() and album.lower() in (item.get('name') or '').lower():
+        album_name = item.get('name') or ''
+        if NON_METAL_SPOTIFY.search(f'{names} {album_name}'):
+            continue
+        if artist.lower() in names.lower() and album.lower() in album_name.lower():
             album_obj = item
             break
-    album_obj = album_obj or (albums[0] if albums else None)
     if not album_obj or not album_obj.get('id'):
         return None
     response = requests.get(
@@ -930,7 +963,8 @@ def album_named_track(access, artist, album, track_name):
             item['album'] = {'name': album_obj.get('name', album), 'id': album_obj.get('id')}
             if not item.get('artists'):
                 item['artists'] = album_obj.get('artists') or [{'name': artist}]
-            return item
+            if _spotify_match_ok(item, artist, track_name or album):
+                return item
     return None
 
 
@@ -1084,6 +1118,10 @@ def passes_quality_gate(candidate, track, catalog, subgenre_counts):
     artist = ((track.get('artists') or [{}])[0].get('name') or candidate['artist'])
     title = track.get('name') or candidate['title']
     album = ((track.get('album') or {}).get('name') or candidate.get('album') or '')
+    if NON_METAL_ARTISTS.search(artist) or NON_METAL_ARTISTS.search(candidate.get('artist') or ''):
+        return False
+    if NON_METAL_SPOTIFY.search(f'{artist} {title} {album}'):
+        return False
     if pair_key(artist, title) in catalog['pairs']:
         return False
     if album and pair_key(artist, album) in catalog['albums'] and candidate.get('kind') == 'album':

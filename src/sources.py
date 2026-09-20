@@ -154,4 +154,14 @@ SUBGENRES = (
 QUALITY_SOURCES = {name for name, cfg in SOURCES.items() if cfg.get('role') == 'quality'}
 DISCOVERY_SOURCES = {name for name, cfg in SOURCES.items() if cfg.get('role') == 'discovery'}
 REGIONAL_SOURCES = {name for name, cfg in SOURCES.items() if cfg.get('role') == 'regional'}
-METAL_NATIVE_SOURCES = set(SOURCES)  # all current outlets are metal-native or metal-focused
+# Only specialist metal press skips the metal-keyword gate.
+# Generalist/rock outlets (Louder, Stereogum, Pitchfork, Kerrang, …) must mention metal.
+METAL_NATIVE_SOURCES = {
+    'Angry Metal Guy',
+    'Decibel',
+    'Revolver',
+    'Metal Injection',
+    'Loudwire',
+    'Metalitalia',
+    'Metallus',
+}

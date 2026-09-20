@@ -2,6 +2,7 @@ import base64
 import os
 import sys
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -615,6 +616,138 @@ class ScoringTests(unittest.TestCase):
         )
         self.assertLessEqual(len(chosen), 3)
         self.assertEqual(len(uris), len(chosen))
+
+
+class MetalGateTests(unittest.TestCase):
+    def test_metal_native_sources_are_specialists_only(self):
+        from sources import METAL_NATIVE_SOURCES
+
+        self.assertEqual(
+            METAL_NATIVE_SOURCES,
+            {
+                'Angry Metal Guy',
+                'Decibel',
+                'Revolver',
+                'Metal Injection',
+                'Loudwire',
+                'Metalitalia',
+                'Metallus',
+            },
+        )
+        for generalist in ('Louder', 'Stereogum', 'Pitchfork', 'Kerrang', 'Consequence', 'BrooklynVegan', 'The Quietus'):
+            self.assertNotIn(generalist, METAL_NATIVE_SOURCES)
+
+    def test_blocks_oasis_and_spa_pairs(self):
+        self.assertIsNone(valid_pair('Oasis', "Don't Look Back In Anger"))
+        self.assertIsNone(valid_pair('ROSÉ', 'new trick'))
+        self.assertIsNone(valid_pair('Shades of Wellness', 'Wellness'))
+        self.assertIsNone(valid_pair('Massage Music', 'Ayurvedic Spa'))
+        self.assertEqual(
+            extract_pairs("Oasis — Don't Look Back In Anger"),
+            [],
+        )
+
+    def test_preserves_apostrophe_titles_for_metal_artists(self):
+        self.assertEqual(
+            extract_pairs("Letterbombs — I'm Not Here To Enjoy My Life"),
+            [('Letterbombs', "I'm Not Here To Enjoy My Life")],
+        )
+
+    @patch('metal_radar.requests.get')
+    def test_generalist_oasis_headline_without_metal_is_skipped(self, get):
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {'content-type': 'application/rss+xml'}
+        response.content = (
+            '<?xml version="1.0"?><rss><channel><item>'
+            '<title>Oasis — Don\'t Look Back In Anger</title>'
+            '<link>https://www.loudersound.com/oasis</link>'
+            '<pubDate>Fri, 18 Sep 2026 10:00:00 GMT</pubDate>'
+            '<description>Britpop classic returns to the charts</description>'
+            '</item></channel></rss>'
+        ).encode('utf-8')
+        get.return_value = response
+        items, consulted = articles()
+        louder_items = [item for item in items if item['source'] == 'Louder']
+        self.assertEqual(louder_items, [])
+        self.assertTrue(consulted)
+
+    @patch('metal_radar.requests.get')
+    def test_generalist_metal_headline_still_passes(self, get):
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {'content-type': 'application/rss+xml'}
+        response.content = (
+            '<?xml version="1.0"?><rss><channel><item>'
+            '<title>Gatecreeper — Dead Star</title>'
+            '<link>https://www.loudersound.com/metal-hammer/gatecreeper</link>'
+            '<pubDate>Fri, 18 Sep 2026 10:00:00 GMT</pubDate>'
+            '<description>death metal premiere exclusive</description>'
+            '</item></channel></rss>'
+        ).encode('utf-8')
+
+        def _side_effect(url, **_kwargs):
+            if 'loudersound.com' in url:
+                return response
+            empty = MagicMock()
+            empty.status_code = 404
+            empty.headers = {'content-type': 'text/html'}
+            empty.content = b'missing'
+            return empty
+
+        get.side_effect = _side_effect
+        items, consulted = articles()
+        self.assertIn('Louder', consulted)
+        louder_items = [item for item in items if item['source'] == 'Louder']
+        self.assertTrue(any('Gatecreeper' in item['title'] for item in louder_items))
+
+    def test_spotify_rejects_spa_album_false_match(self):
+        from metal_radar import _spotify_match_ok, search
+
+        spa = {
+            'id': 'spa1',
+            'name': 'Wellness',
+            'artists': [{'name': 'Shades of Wellness'}],
+            'album': {
+                'name': 'Massage Music - Ayurvedic Massage Relaxing Music for Wellness Center and Spa',
+            },
+        }
+        self.assertFalse(_spotify_match_ok(spa, 'Shades of Wellness', 'Wellness'))
+
+        metal = {
+            'id': 'ok1',
+            'name': 'Dead Star',
+            'artists': [{'name': 'Gatecreeper'}],
+            'album': {'name': 'Dark Superstition'},
+        }
+        self.assertTrue(_spotify_match_ok(metal, 'Gatecreeper', 'Dead Star'))
+
+        with patch('metal_radar._search') as search_api:
+            search_api.return_value = {'tracks': {'items': [spa]}}
+            self.assertIsNone(search('token', 'Shades of Wellness', 'Wellness'))
+
+    def test_quality_gate_rejects_spa_spotify_hit(self):
+        from metal_radar import passes_quality_gate
+
+        candidate = {
+            'artist': 'Shades of Wellness',
+            'title': 'Wellness',
+            'album': 'Wellness',
+            'score': 44,
+            'source_scores': {'premiere_bonus': 15},
+            'kind': 'track',
+            'subgenre': 'black metal',
+        }
+        track_hit = {
+            'id': 'spa1',
+            'name': 'Wellness',
+            'artists': [{'name': 'Shades of Wellness'}],
+            'album': {
+                'name': 'Massage Music - Ayurvedic Massage Relaxing Music for Wellness Center and Spa',
+            },
+        }
+        catalog = {'ids': set(), 'pairs': set(), 'albums': set()}
+        self.assertFalse(passes_quality_gate(candidate, track_hit, catalog, Counter()))
 
 
 if __name__ == '__main__':

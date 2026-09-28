@@ -1,0 +1,97 @@
+{
+  "week": "2026-09-28",
+  "notes": "Selezione editoriale 19–28 settembre 2026. Evita ripetizioni dal radar precedente; Top 5 obbligatori in testa. Godflesh Decay escluso perché Master And Slave era già nel radar precedente.",
+  "excluded": [
+    {
+      "artist": "Godflesh",
+      "title": "Decay",
+      "reason": "Stesso artista già presente nel radar precedente con Master And Slave — il Radar deve scoprire, non inseguire band già coperte."
+    }
+  ],
+  "tracks": [
+    {
+      "artist": "The Ocean",
+      "title": "Belligerence",
+      "subgenre": "progressive/post-metal",
+      "priority": 1,
+      "why": "Solaris (25 set). Heavy Blog is Heavy lo considera tra i migliori lavori della band da anni."
+    },
+    {
+      "artist": "Crypta",
+      "title": "A Portrait Of Decay",
+      "subgenre": "death metal",
+      "priority": 2,
+      "why": "Prima uscita con la nuova formazione; più atmosferico e proggy del death tradizionale della band."
+    },
+    {
+      "artist": "DragonForce",
+      "title": "Hunger Of The Beast",
+      "subgenre": "power/melodic death",
+      "priority": 3,
+      "why": "DragonForce + Alissa White-Gluz: una delle novità più interessanti della settimana."
+    },
+    {
+      "artist": "Brat",
+      "title": "Bloody Mary",
+      "subgenre": "death/grind/hardcore",
+      "priority": 4,
+      "why": "Manslayer 6/7 su Metal Hammer Germany: mix personale di death, grind, hardcore e thrash."
+    },
+    {
+      "artist": "Pain Of Truth",
+      "title": "Obliteration",
+      "subgenre": "hardcore/metallic hardcore",
+      "priority": 5,
+      "why": "8/10 Metalitalia; hardcore contemporaneo che convive col metal senza forzature."
+    },
+    {
+      "artist": "Bullet For My Valentine",
+      "title": "Social Apocalypse",
+      "subgenre": "modern metalcore",
+      "priority": 6,
+      "why": "Primo brano nuovo in quattro anni; Metal Hammer lo legge come ritorno al lato più metal."
+    },
+    {
+      "artist": "Clutch",
+      "title": "Wasted Lands",
+      "subgenre": "stoner/heavy rock",
+      "priority": 7,
+      "why": "Groove enorme, riff pesanti, componente più sporca rispetto alla media mainstream."
+    },
+    {
+      "artist": "Apocalyptica",
+      "title": "Upperhand",
+      "subgenre": "symphonic/folk metal",
+      "priority": 8,
+      "why": "Feat. Kalandra. Cinematica e oscura; Metal Hammer tra le tracce migliori della settimana."
+    },
+    {
+      "artist": "Gåte",
+      "title": "Mi Jord",
+      "subgenre": "folk/metal sperimentale",
+      "priority": 9,
+      "why": "Scelta fuori schema: folk nordico, chitarre pesanti, elettronica, atmosfera rituale."
+    },
+    {
+      "artist": "Great Falls",
+      "title": "Debt Ethics",
+      "subgenre": "noise rock/post-hardcore/sludge",
+      "priority": 10,
+      "why": "Singolo 26 set, prodotto da Scott Evans (Neurosis/Sumac). Scelta più underground della settimana."
+    },
+    {
+      "artist": "Azarath",
+      "title": "Herald Of The Unseen",
+      "subgenre": "black/death metal",
+      "priority": 11,
+      "why": "Singolo 26 set; impronta più estrema rispetto alla parte mainstream della selezione."
+    },
+    {
+      "artist": "Wolf",
+      "title": "Waltz Post-Mortem",
+      "subgenre": "traditional heavy metal",
+      "priority": 12,
+      "why": "Old-school per bilanciare il Radar. Metal Hammer Italia: fresco ma ancorato all'heavy anni ’80."
+    }
+  ]
+}

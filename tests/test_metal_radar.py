@@ -304,12 +304,13 @@ class DiagnosticTests(unittest.TestCase):
         response = MagicMock()
         response.status_code = 200
         response.headers = {'content-type': 'application/rss+xml'}
+        pub = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
         response.content = (
             '<?xml version="1.0"?><rss><channel><item>'
             '<title>A Band — A Song metal</title>'
             '<link>https://example.com/a</link>'
             '<description>https://example.com/not-html</description>'
-            '<pubDate>Fri, 18 Sep 2026 10:00:00 GMT</pubDate>'
+            f'<pubDate>{pub}</pubDate>'
             '</item></channel></rss>'
         ).encode('utf-8')
         get.return_value = response
@@ -748,6 +749,103 @@ class MetalGateTests(unittest.TestCase):
         }
         catalog = {'ids': set(), 'pairs': set(), 'albums': set()}
         self.assertFalse(passes_quality_gate(candidate, track_hit, catalog, Counter()))
+
+
+class TitleCaseHeadlineTests(unittest.TestCase):
+    def test_extracts_title_case_announce_listen_and_hear_pairs(self):
+        self.assertEqual(
+            extract_pairs('Bullet For My Valentine Announce Album With New Song “Social Apocalypse”'),
+            [('Bullet For My Valentine', 'Social Apocalypse')],
+        )
+        self.assertEqual(
+            extract_pairs(
+                'LISTEN: Bullet For My Valentine Announces New Record “Social Apocalypse,” Hear The Title Track'
+            ),
+            [('Bullet For My Valentine', 'Social Apocalypse')],
+        )
+        self.assertEqual(
+            extract_pairs(
+                'DragonForce Announces First Album With Alissa White-Gluz And Shares New Single “Hunger Of The Beast”'
+            ),
+            [('DragonForce', 'Hunger Of The Beast')],
+        )
+        self.assertEqual(
+            extract_pairs('Hear Brat’s Vicious New Song “Speculum Bleed”'),
+            [('Brat', 'Speculum Bleed')],
+        )
+
+
+class EditorialPicksTests(unittest.TestCase):
+    def test_editorial_candidates_are_priority_ordered(self):
+        from metal_radar import editorial_candidates
+
+        ranked = editorial_candidates({
+            'tracks': [
+                {'artist': 'Crypta', 'title': 'A Portrait Of Decay', 'priority': 2, 'subgenre': 'death metal'},
+                {'artist': 'The Ocean', 'title': 'Belligerence', 'priority': 1, 'why': 'Top pick'},
+            ],
+        })
+        self.assertEqual(
+            [(item['artist'], item['title']) for item in ranked],
+            [('The Ocean', 'Belligerence'), ('Crypta', 'A Portrait Of Decay')],
+        )
+        self.assertEqual(ranked[0]['editorial_why'], 'Top pick')
+        self.assertGreaterEqual(ranked[0]['score'], ranked[1]['score'])
+
+    def test_editorial_picks_win_selection_slots(self):
+        from metal_radar import editorial_candidates
+
+        editorial = editorial_candidates({
+            'tracks': [
+                {'artist': 'The Ocean', 'title': 'Belligerence', 'priority': 1},
+                {'artist': 'Crypta', 'title': 'A Portrait Of Decay', 'priority': 2},
+            ],
+        })
+        auto = [{
+            'artist': 'Filler Band',
+            'title': 'Filler Song',
+            'score': 55,
+            'sources': {'Metal Injection'},
+            'roles': {'discovery'},
+            'kinds': {'editorial'},
+            'review_sources': set(),
+            'primary_type': 'premiere',
+            'source_publications': ['Metal Injection'],
+            'bucket': 'emerging',
+            'subgenre': 'death metal',
+            'kind': 'track',
+            'source_scores': {'quality': 20},
+            'highlights': set(),
+        }]
+        catalog = {
+            ('The Ocean', 'Belligerence'): track('ed-1', 'The Ocean', 'Belligerence'),
+            ('Crypta', 'A Portrait Of Decay'): track('ed-2', 'Crypta', 'A Portrait Of Decay'),
+            ('Filler Band', 'Filler Song'): track('auto-1', 'Filler Band', 'Filler Song'),
+        }
+        chosen, uris, _known, _extra = select_tracks(
+            editorial + auto,
+            set(),
+            lambda artist, title: catalog[(artist, title)],
+        )
+        self.assertEqual(
+            [item[1]['id'] for item in chosen[:2]],
+            ['ed-1', 'ed-2'],
+        )
+        self.assertEqual(uris[:2], ['spotify:track:ed-1', 'spotify:track:ed-2'])
+
+    def test_load_editorial_picks_skips_applied(self):
+        import tempfile
+        from pathlib import Path
+        from metal_radar import load_editorial_picks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'editorial-picks.json'
+            path.write_text('{"week":"2026-09-28","applied_at":"2026-09-28T12:00:00+00:00","tracks":[{"artist":"A","title":"B"}]}')
+            self.assertIsNone(load_editorial_picks(path=path, now=datetime(2026, 9, 28, tzinfo=timezone.utc)))
+            path.write_text('{"week":"2026-09-28","tracks":[{"artist":"A","title":"B"}]}')
+            payload = load_editorial_picks(path=path, now=datetime(2026, 9, 28, tzinfo=timezone.utc))
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload['tracks'][0]['artist'], 'A')
 
 
 if __name__ == '__main__':

@@ -30,6 +30,8 @@ from sources import (
 ROOT = Path(__file__).resolve().parents[1]
 HISTORY_PATH = ROOT / 'data' / 'history.json'
 REPORT_PATH = ROOT / 'data' / 'latest-report.md'
+EDITORIAL_PICKS_PATH = ROOT / 'data' / 'editorial-picks.json'
+EDITORIAL_SCORE = 95
 NOW = datetime.now(timezone.utc)
 LOOKBACK = NOW - timedelta(days=7)
 LOOKAHEAD = NOW + timedelta(days=14)
@@ -96,17 +98,30 @@ PREMIERE_PAIR = re.compile(
     r'(?P<artist>[^–\—"“\']+?)\s*[–—\-:]\s*["“\']?(?P<title>[^"”\'\n]+)',
     re.I,
 )
+# Title Case and ALL CAPS artists both appear in English premiere headlines.
+# Stop common headline verbs from being swallowed into the artist name.
+# Apostrophes stay outside the token so "Brat's" / "ARCHITECTs'" possessives work.
+_ARTIST_TOKEN = (
+    r'(?!Announces?\b|Drops\b|Shares\b|Releases?\b|Teams\b|Returns\b|'
+    r'Unveils?\b|Performs?\b|Hear\b|Listen\b|Watch\b|Featuring\b)'
+    r'[A-Z0-9][\w.&/-]*'
+)
+_ARTIST_NAME = (
+    rf'(?P<artist>(?:{_ARTIST_TOKEN})'
+    rf'(?:\s+(?:&|AND|THE|OF|Feat\.?|feat\.?|{_ARTIST_TOKEN})){{0,6}})'
+)
 MI_QUOTED_PAIR = re.compile(
-    r'(?:LISTEN|WATCH)\s*[:—–-]\s*'
-    r'(?P<artist>(?:[A-Z0-9][A-Z0-9.&\'’/-]*)(?:\s+(?:&|AND|THE|OF|[A-Z0-9][A-Z0-9.&\'’/-]*)){0,6})\b'
+    rf'(?:LISTEN|WATCH)\s*[:—–-]\s*{_ARTIST_NAME}\b'
     r'[^"“]{0,120}?["“](?P<title>[^"”]{2,80})["”]',
 )
 HEAR_QUOTED_PAIR = re.compile(
-    r'\bHear\s+(?P<artist>[A-Z][\w.&’/-]*(?:\s+[A-Z][\w.&’/-]*){0,3})[\'’]?s?\s+'
-    r'(?:first\s+|new\s+)?(?:album|song|single|track).{0,80}?["“‘](?P<title>[^"”’]{2,80})["”’]',
+    rf'\bHear\s+{_ARTIST_NAME}[\'’]?s?\s+'
+    r'.{0,40}?\b(?:album|song|single|track)\b.{0,80}?["“‘](?P<title>[^"”’]{2,80})["”’]',
+    re.I,
 )
 ANNOUNCE_QUOTED_PAIR = re.compile(
-    r'(?P<artist>[A-Z][A-Z0-9][A-Z0-9\s.&\'’/-]{0,40}?)\s+Announce\b[^"“]{0,100}?["“](?P<title>[^"”]{2,80})["”]',
+    rf'{_ARTIST_NAME}\s+Announces?\b'
+    r'[^"“]{0,140}?["“](?P<title>[^"”]{2,80})["”]',
 )
 IT_SINGLE_PAIR = re.compile(
     r'^(?P<artist>[A-ZÀ-Ü0-9][^:]{1,60}?)\s*:\s*'
@@ -197,6 +212,119 @@ def load():
 
 def save(value):
     HISTORY_PATH.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+
+
+def load_editorial_picks(path=None, now=None):
+    """Return pending human-curated picks for the current week, if any."""
+    path = Path(path) if path else EDITORIAL_PICKS_PATH
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get('applied_at'):
+        return None
+    tracks = payload.get('tracks') or []
+    if not isinstance(tracks, list) or not tracks:
+        return None
+    now = now or NOW
+    week = str(payload.get('week') or '').strip()
+    if week:
+        try:
+            week_date = date_parser.parse(week)
+            if week_date.tzinfo is None:
+                week_date = week_date.replace(tzinfo=timezone.utc)
+            # Keep picks active from the stated week day through the following Friday window.
+            if week_date < now - timedelta(days=10) or week_date > now + timedelta(days=3):
+                return None
+        except (ValueError, OverflowError, TypeError):
+            pass
+    payload['tracks'] = [
+        item for item in tracks
+        if isinstance(item, dict) and item.get('artist') and item.get('title')
+    ]
+    if not payload['tracks']:
+        return None
+    return payload
+
+
+def mark_editorial_picks_applied(path=None, applied_at=None):
+    path = Path(path) if path else EDITORIAL_PICKS_PATH
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError, TypeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    payload['applied_at'] = applied_at or datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + '\n')
+
+
+def editorial_candidates(picks):
+    """Turn curated editorial picks into high-priority selection candidates."""
+    if not picks:
+        return []
+    ranked = []
+    for index, item in enumerate(picks.get('tracks') or []):
+        artist = str(item.get('artist') or '').strip()
+        title = str(item.get('title') or '').strip()
+        if not artist or not title:
+            continue
+        priority = item.get('priority')
+        try:
+            priority_n = int(priority) if priority is not None else 50 + index
+        except (TypeError, ValueError):
+            priority_n = 50 + index
+        # Lower priority number = stronger pick; keep all editorial above auto pool.
+        score = max(MIN_SCORE + 1, EDITORIAL_SCORE - max(0, priority_n - 1))
+        subgenre = str(item.get('subgenre') or detect_subgenre(f'{artist} {title}') or 'metal')
+        why = str(item.get('why') or picks.get('notes') or 'editorial pick').strip()
+        ranked.append({
+            'artist': artist,
+            'title': title,
+            'album': str(item.get('album') or ''),
+            'kind': 'track',
+            'sources': {'Editorial'},
+            'source_urls': [],
+            'kinds': {'editorial'},
+            'regions': {'IT'},
+            'roles': {'quality'},
+            'authorities': [10],
+            'item_types': {'list'},
+            'review_sources': {'Editorial'},
+            'ratings': [],
+            'rating_labels': [],
+            'highlights': set(),
+            'body_read': True,
+            'sentiment': 'positive',
+            'editorial': True,
+            'recent': True,
+            'subgenre': subgenre,
+            'summary': why,
+            'best_rating': None,
+            'rating_label': None,
+            'bucket': 'established',
+            'score': score,
+            'source_scores': {
+                'rating': 0,
+                'quality_authority': 20,
+                'review_consensus': 20,
+                'recency': 10,
+                'premiere_bonus': 0,
+                'subgenre': 5,
+            },
+            'source_publications': ['Editorial'],
+            'primary_type': 'review',
+            'editorial_priority': priority_n,
+            'editorial_why': why,
+        })
+    ranked.sort(key=lambda item: (item.get('editorial_priority', 99), -item.get('score', 0)))
+    return ranked
 
 
 def published(entry):
@@ -1087,6 +1215,8 @@ def catalog_from_items(items, history):
 
 
 def why_selected(candidate):
+    if candidate.get('editorial_why') or (candidate.get('sources') or set()) == {'Editorial'}:
+        return candidate.get('editorial_why') or candidate.get('summary') or 'editorial pick'
     pubs = ', '.join(candidate.get('source_publications') or sorted(candidate.get('sources') or []))
     rating = candidate.get('rating_label')
     primary = candidate.get('primary_type', 'news')
@@ -1100,6 +1230,8 @@ def why_selected(candidate):
 
 
 def max_for_source(source, candidate):
+    if source == 'Editorial' or (candidate.get('sources') or set()) == {'Editorial'}:
+        return MAX_TRACKS
     roles = candidate.get('roles') or set()
     if source in QUALITY_SOURCES or 'quality' in roles:
         return MAX_PER_SOURCE_QUALITY
@@ -1299,6 +1431,7 @@ def write_report(chosen, uris, stats):
         f'TOTAL PLAYLIST TRACKS: {stats.get("playlist_total", len(uris))}',
         f'DUPLICATES REJECTED: {stats.get("duplicates_rejected", 0)}',
         f'SOURCES CONSULTED: {", ".join(stats.get("sources_consulted") or []) or "none"}',
+        f'EDITORIAL PICKS: {stats.get("editorial_count", 0)}',
         '',
         '## NEW TRACKS ADDED',
         '',
@@ -1320,6 +1453,16 @@ def write_report(chosen, uris, stats):
             f"   Sources: {pubs or 'n/a'}",
             '',
         ])
+    excluded = stats.get('editorial_excluded') or []
+    if excluded:
+        lines.extend(['## EDITORIAL EXCLUSIONS', ''])
+        for item in excluded:
+            artist = item.get('artist') or 'unknown'
+            title = item.get('title') or ''
+            reason = item.get('reason') or 'excluded'
+            label = f'{artist} — {title}' if title else artist
+            lines.append(f'- {label}: {reason}')
+        lines.append('')
     rejected = stats.get('rejected_negatives') or []
     if rejected:
         lines.extend(['## REJECTED NEGATIVE REVIEWS', ''])
@@ -1334,6 +1477,8 @@ def write_report(chosen, uris, stats):
 
 def main():
     history = load()
+    picks = load_editorial_picks()
+    editorial = editorial_candidates(picks)
     items, consulted = articles()
     items, rejected_negatives = enrich_reviews(items)
     access, granted_scope = _refresh_access_token()
@@ -1348,6 +1493,17 @@ def main():
     current = existing(access, playlist)
     catalog = catalog_from_items(current, history)
     ranked = candidates(items)
+    if editorial:
+        editorial_keys = {
+            (item['artist'].lower(), item['title'].lower())
+            for item in editorial
+        }
+        ranked = [
+            item for item in ranked
+            if (item['artist'].lower(), item['title'].lower()) not in editorial_keys
+        ]
+        ranked = editorial + ranked
+        print(f'Editorial picks loaded: {len(editorial)}')
     chosen, uris, known, extra = select_tracks(
         ranked,
         catalog['ids'],
@@ -1365,17 +1521,26 @@ def main():
     history['articles'] = [item['link'] for item in items]
     history['last_run'] = datetime.now(timezone.utc).isoformat()
     save(history)
+    if picks:
+        mark_editorial_picks_applied()
+    editorial_added = sum(
+        1 for candidate, _track in chosen
+        if (candidate.get('sources') or set()) == {'Editorial'}
+    )
     stats = {
         'duplicates_rejected': extra.get('duplicates_rejected', 0),
         'sources_consulted': consulted,
         'playlist_total': playlist_total,
         'rejected_negatives': rejected_negatives,
+        'editorial_count': editorial_added,
+        'editorial_excluded': (picks or {}).get('excluded') or [],
     }
     write_report(chosen, uris, stats)
     print(f'Added tracks: {len(uris)}')
     print(f'Sources consulted: {len(consulted)}')
     print(f'Duplicates rejected: {stats["duplicates_rejected"]}')
     print(f'Rejected negatives: {len(rejected_negatives)}')
+    print(f'Editorial picks added: {editorial_added}')
 
 
 if __name__ == '__main__':

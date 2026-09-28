@@ -36,6 +36,12 @@ pip install -r requirements.txt
 python -m unittest tests.test_metal_radar
 ```
 
+## Editorial picks (optional)
+
+Drop a curated list in `data/editorial-picks.json` to force priority tracks on the next run. Pending picks are prepended to the auto-ranked pool, resolved on Spotify, then marked with `applied_at` so they are not re-applied every week.
+
+Example shape: `week`, `notes`, `excluded[]`, and `tracks[]` with `artist`, `title`, `subgenre`, `priority`, `why`.
+
 ---
 
 Built for discovery. Powered by the metal press. Delivered to Spotify every week.

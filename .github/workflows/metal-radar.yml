@@ -29,6 +29,6 @@ jobs:
         run: |
           git config user.name 'metal-radar-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add data/history.json data/latest-report.md
+          git add data/history.json data/latest-report.md data/editorial-picks.json
           git diff --cached --quiet || git commit -m 'Update Metal Radar'
           git push

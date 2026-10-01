@@ -428,7 +428,7 @@ class ScoringTests(unittest.TestCase):
         ]
         with patch('metal_radar.search', return_value=None), patch(
             'metal_radar.album_named_track', return_value=None
-        ):
+        ), patch('metal_radar.album_focus_track', return_value=None):
             # No highlight and album-name search fails => empty, not 3 tracks.
             resolved = resolve_candidate('token', candidate)
         self.assertEqual(resolved, [])
@@ -633,9 +633,18 @@ class MetalGateTests(unittest.TestCase):
                 'Loudwire',
                 'Metalitalia',
                 'Metallus',
+                'Metal Hammer Italia',
+                'Invisible Oranges',
+                'No Clean Singing',
+                'Heavy Blog Is Heavy',
+                'Metal Storm',
+                'Toilet ov Hell',
             },
         )
-        for generalist in ('Louder', 'Stereogum', 'Pitchfork', 'Kerrang', 'Consequence', 'BrooklynVegan', 'The Quietus'):
+        for generalist in (
+            'Louder', 'Stereogum', 'Pitchfork', 'Kerrang', 'Consequence', 'BrooklynVegan',
+            'The Quietus', 'Bandcamp Daily',
+        ):
             self.assertNotIn(generalist, METAL_NATIVE_SOURCES)
 
     def test_blocks_oasis_and_spa_pairs(self):

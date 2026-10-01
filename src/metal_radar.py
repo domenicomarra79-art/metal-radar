@@ -4,8 +4,10 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from warnings import catch_warnings, filterwarnings
 from zoneinfo import ZoneInfo
@@ -18,11 +20,13 @@ from dateutil import parser as date_parser
 SRC_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+import llm_extract
 from sources import (
     DISCOVERY_SOURCES,
     METAL_NATIVE_SOURCES,
     QUALITY_SOURCES,
     REGIONAL_SOURCES,
+    REVIEW_FEED_SOURCES,
     SOURCES,
     SUBGENRES,
 )
@@ -46,13 +50,26 @@ MAX_PER_SOURCE_DISCOVERY = 2
 MAX_PER_SOURCE_REGIONAL = 3
 CANDIDATE_POOL = 80
 MIN_SCORE = 40
+# Premiere-only picks (no review behind them) need a higher bar in the main pass;
+# below it they only top the playlist up to MIN_TRACKS.
+MIN_PREMIERE_SCORE = 50
+# A lone lukewarm review (AMG 2.5/5, 5/10) is no stronger a signal than a premiere.
+WEAK_REVIEW_RATING = 0.6
+KNOWN_ARTIST_BONUS = 6
+EXTRA_PREMIERE_SOURCE_BONUS = 10
 PITCHFORK_ONLY_CAP = 3
 SINGLE_DISCOVERY_CAP = 3
 PREMIERE_SCORE_CAP = 55
 MAX_REVIEW_BODIES = 40
 SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token'
 SPOTIFY_API = 'https://api.spotify.com/v1'
-SEARCH_LIMIT = 5
+# Spotify caps search pages at 10 for development-mode apps.
+SEARCH_LIMIT = 10
+TITLE_MATCH_MIN = 0.88
+ARTIST_MATCH_MIN = 0.9
+MIN_TRACK_MS = 120_000
+SOLID_TRACK_MS = 180_000
+MUSICBRAINZ_API = 'https://musicbrainz.org/ws/2/artist/'
 FEED_HEADERS = {
     'User-Agent': 'MetalRadar/1.0 (+https://github.com/domenicomarra79-art/metal-radar)',
     'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
@@ -94,8 +111,13 @@ PAIR = re.compile(
     r'(?P<artist>[A-Z][^—–\-:|]{1,80})\s*[—–\-:]\s*["“]?(?P<title>[^"”\n|]{2,100})'
 )
 PREMIERE_PAIR = re.compile(
-    r'(?:Track Premiere|Video Premiere|Full(?: Album)? Stream)\s*[:—–-]\s*'
+    r'(?:NCS (?:Video )?Premiere|Track Premiere|Video Premiere|Album Premiere|Full(?: Album)? Stream)\s*[:—–-]\s*'
     r'(?P<artist>[^–\—"“\']+?)\s*[–—\-:]\s*["“\']?(?P<title>[^"”\'\n]+)',
+    re.I,
+)
+# "Track Premiere: Veilburner‘s “Golgothic Holocaust”" (Toilet ov Hell style).
+POSSESSIVE_PREMIERE_PAIR = re.compile(
+    r'Premiere\s*:\s*(?P<artist>[^“"‘’\'\n]{2,60}?)[‘’\']s?\s*["“](?P<title>[^"”]{2,80})["”]',
     re.I,
 )
 # Title Case and ALL CAPS artists both appear in English premiere headlines.
@@ -136,6 +158,10 @@ REVIEW_HEADLINE = re.compile(
 REVIEW_HEADLINE_FLIP = re.compile(
     r'^Review:\s*(?P<artist>.+?)\s*[—–-]\s*(?P<album>.+)$',
     re.I,
+)
+# "SRPNTS:  “SECOND SHAPE”" (No Clean Singing album reviews).
+REVIEW_HEADLINE_QUOTED = re.compile(
+    r'^(?P<artist>[^:“"]{2,60}?)\s*:\s*["“](?P<album>[^"”]{2,80})["”]\s*$',
 )
 PLAYLIST_IN_URL = re.compile(r'(/playlists/)([^/?#]+)')
 REQUIRED_PLAYLIST_SCOPES = (
@@ -196,9 +222,37 @@ HIGHLIGHT_QUOTED = re.compile(
 )
 AMG_RATING = re.compile(r'Rating\s*:?\s*([0-5](?:\.\d+)?)', re.I)
 PITCHFORK_RATING = re.compile(r'\b([0-9](?:\.\d+)?)\s*(?:/|\s+out of\s+)10\b', re.I)
-DECIBEL_RATING = re.compile(r'\b([0-9]{1,2})\s*/\s*10\b')
-PERCENT_RATING = re.compile(r'\b([6-9][0-9]|100)\s*%')
+# A score only counts when it is labelled ("Rating: 8/10", "Voto: 7,5") or sits in
+# the verdict at the end of the review; a stray "9/10 songs" mid-body is not a rating.
+LABELLED_RATING = re.compile(
+    r'\b(?:rating|score|verdict|grade|voto|valutazione)\s*[:\-–]?\s*'
+    r'(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:/\s*(10|5)\b|(?:su|out of)\s+(10|5)\b)?',
+    re.I,
+)
+BARE_RATING = re.compile(
+    r'(?<![\d/.,])(\d{1,2}(?:[.,]\d)?)\s*/\s*(10|5)\b'
+    r'(?!\s*(?:songs?|tracks?|times|of|people|bands?|albums?|records?)\b)',
+    re.I,
+)
+LABELLED_PERCENT = re.compile(r'\b(?:rating|score|voto)\s*:?\s*([1-9][0-9]|100)\s*%', re.I)
+RATING_TAIL_CHARS = 700
+QUALITATIVE_POSITIVE = 0.68
+QUALITATIVE_NEGATIVE = 0.25
+# AMG grades harshly (3.0 = "good", 3.5 = "very good"); lift it onto the shared
+# scale before scoring so it competes fairly with /10 outlets.
+RATING_CALIBRATION = {'Angry Metal Guy': 0.06}
 BNM = re.compile(r'best new music', re.I)
+UNWANTED_VERSION = re.compile(
+    r'\b(live|demo|remaster(?:ed)?|instrumental|acoustic|karaoke|re-?recorded|rehearsal|'
+    r'commentary|radio edit|edit|sped up|slowed|8-bit|lullaby)\b',
+    re.I,
+)
+FILLER_TRACK = re.compile(r'\b(intro|outro|interlude|prelude|skit|reprise)\b', re.I)
+METAL_GENRE = re.compile(
+    r'metal|core|doom|sludge|grind|thrash|stoner|djent|crust|drone|noise|industrial|'
+    r'black|death|gothic|post-rock|shoegaze|screamo|heavy|dungeon synth|power violence',
+    re.I,
+)
 
 
 def load():
@@ -373,6 +427,15 @@ def clean_text(entry):
     return title, text, body
 
 
+def entry_tags(entry):
+    terms = []
+    for tag in entry.get('tags') or []:
+        term = tag.get('term') if isinstance(tag, dict) else None
+        if term:
+            terms.append(str(term))
+    return ' | '.join(terms)
+
+
 def fetch_feed(url):
     try:
         response = requests.get(url, headers=FEED_HEADERS, timeout=30)
@@ -392,10 +455,17 @@ def fetch_feed(url):
     return feed, None
 
 
-def classify_item_type(title, text, source, role):
+def classify_item_type(title, text, source, role, tags=''):
     blob = f'{title} {text}'
     if LIST_HINT.search(blob):
         return 'list'
+    if source in REVIEW_FEED_SOURCES:
+        return 'review'
+    # Feed categories are the outlet's own label and beat headline guessing.
+    if re.search(r'\breviews?\b|\brecension[ei]\b', tags or '', re.I):
+        return 'review'
+    if re.search(r'\bpremieres?\b|\bdebuts\b', tags or '', re.I):
+        return 'premiere'
     if REVIEW_HINT.search(title or '') or (role == 'quality' and REVIEW_HINT.search(blob)):
         return 'review'
     if source == 'Angry Metal Guy' and re.search(r'\breview\b', title or '', re.I):
@@ -423,8 +493,9 @@ def articles():
             for entry in feed.entries:
                 date = published(entry)
                 title, text, body = clean_text(entry)
-                item_type = classify_item_type(title, text, source, role)
-                metal_ok = source in METAL_NATIVE_SOURCES or bool(METAL.search(text))
+                tags = entry_tags(entry)
+                item_type = classify_item_type(title, text, source, role, tags)
+                metal_ok = source in METAL_NATIVE_SOURCES or bool(METAL.search(f'{text} {tags}'))
                 if not metal_ok:
                     continue
                 if NOSTALGIA.search(text) and not CURRENT.search(text):
@@ -444,6 +515,7 @@ def articles():
                     'role': role,
                     'item_type': item_type,
                     'body_read': bool(body and len(body) > 120),
+                    'tags': tags,
                 })
         if fetched:
             consulted.append(source)
@@ -485,17 +557,53 @@ def parse_rating(source, text):
                 value = min(1.0, value + 0.05)
                 label += ' BNM'
             return value, label
-    match = DECIBEL_RATING.search(blob)
-    if match:
-        return float(match.group(1)) / 10.0, f'{match.group(1)}/10'
-    match = PERCENT_RATING.search(blob)
+    labelled = _labelled_rating(blob)
+    if labelled:
+        return labelled
+    tail = blob[-RATING_TAIL_CHARS:]
+    for match in BARE_RATING.finditer(tail):
+        value = _scaled(match.group(1), match.group(2))
+        if value is not None:
+            return value, f'{match.group(1)}/{match.group(2)}'
+    match = LABELLED_PERCENT.search(blob)
     if match:
         return float(match.group(1)) / 100.0, f'{match.group(1)}%'
     if POSITIVE_QUAL.search(blob):
-        return 0.82, 'qualitative positive'
+        return QUALITATIVE_POSITIVE, 'qualitative positive'
     if NEGATIVE_QUAL.search(blob):
-        return 0.25, 'qualitative negative'
+        return QUALITATIVE_NEGATIVE, 'qualitative negative'
     return None, None
+
+
+def _scaled(raw, scale):
+    try:
+        value = float(str(raw).replace(',', '.')) / float(scale)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return value if 0.0 <= value <= 1.0 else None
+
+
+def _labelled_rating(blob):
+    for match in LABELLED_RATING.finditer(blob):
+        raw = match.group(1)
+        scale = match.group(2) or match.group(3)
+        if not scale:
+            # Italian "Voto: 7,5" is always out of 10; an unscaled English
+            # "Rating: 4.0" could be /5 or /10, so only trust it above 5.
+            italian = match.group(0).lower().startswith(('voto', 'valutazione'))
+            if not italian and float(raw.replace(',', '.')) <= 5:
+                continue
+            scale = '10'
+        value = _scaled(raw, scale)
+        if value is not None:
+            return value, f'{raw}/{scale}'
+    return None
+
+
+def calibrated_rating(source, rating):
+    if rating is None:
+        return None
+    return min(1.0, rating + RATING_CALIBRATION.get(source, 0.0))
 
 
 def parse_sentiment(rating, text):
@@ -528,7 +636,26 @@ def parse_highlight(text, album=''):
     return ''
 
 
-def enrich_reviews(items, max_bodies=MAX_REVIEW_BODIES):
+def _apply_llm_review(item, data, rating, label, sentiment, highlight):
+    """Prefer Claude's per-release reading over regex guesses where it has one."""
+    item['llm_releases'] = data['releases']
+    item['llm_not_metal'] = not data['is_metal']
+    if not data['releases']:
+        return rating, label, sentiment, highlight
+    first = data['releases'][0]
+    regex_numeric = rating is not None and not (label or '').startswith('qualitative')
+    if first['rating'] is not None and not regex_numeric:
+        rating = first['rating']
+        label = first['rating_label'] or f"{first['rating']:.2f}"
+    sentiment = first['sentiment']
+    if rating is not None and rating < 0.45:
+        sentiment = 'negative'
+    if first['tracks']:
+        highlight = first['tracks'][0]
+    return rating, label, sentiment, highlight
+
+
+def enrich_reviews(items, max_bodies=MAX_REVIEW_BODIES, extractor=None):
     rejected_negatives = []
     fetches = 0
     for item in items:
@@ -537,6 +664,13 @@ def enrich_reviews(items, max_bodies=MAX_REVIEW_BODIES):
             item.setdefault('rating_label', None)
             item.setdefault('sentiment', 'positive')
             item.setdefault('highlight', '')
+            # Headlines the regexes cannot split (IO's "Band Perform A Cursed “Song”")
+            # go to Claude; parsed ones skip it to save calls.
+            if extractor and extractor.available() and not extract_pairs(item.get('title', '')):
+                data = extractor.extract(item['source'], item.get('title', ''), item.get('text', ''))
+                if data:
+                    item['llm_releases'] = data['releases']
+                    item['llm_not_metal'] = not data['is_metal']
             continue
         body = item.get('body') or ''
         if len(body) < 160 and item.get('link') and fetches < max_bodies:
@@ -554,6 +688,15 @@ def enrich_reviews(items, max_bodies=MAX_REVIEW_BODIES):
         if extracted:
             album_guess = extracted[1]
         highlight = parse_highlight(body or item.get('text', ''), album_guess)
+        if extractor and extractor.available():
+            data = extractor.extract(item['source'], item.get('title', ''), body or item.get('text', ''))
+            if data:
+                rating, label, sentiment, highlight = _apply_llm_review(
+                    item, data, rating, label, sentiment, highlight,
+                )
+        # Sentiment is judged on the outlet's own scale; scoring uses the calibrated one.
+        if not (label or '').startswith('qualitative'):
+            rating = calibrated_rating(item['source'], rating)
         item['rating'] = rating
         item['rating_label'] = label
         item['sentiment'] = sentiment
@@ -593,7 +736,7 @@ def source_bucket(sources, regions, kinds, roles=None):
 
 
 def extract_review_album(title):
-    for pattern in (REVIEW_HEADLINE_FLIP, REVIEW_HEADLINE):
+    for pattern in (REVIEW_HEADLINE_FLIP, REVIEW_HEADLINE_QUOTED, REVIEW_HEADLINE):
         match = pattern.match((title or '').strip())
         if not match:
             continue
@@ -609,7 +752,7 @@ def extract_review_album(title):
 
 def extract_pairs(text):
     pairs = []
-    for pattern in (PREMIERE_PAIR, MI_QUOTED_PAIR, HEAR_QUOTED_PAIR, ANNOUNCE_QUOTED_PAIR, IT_SINGLE_PAIR, PAIR):
+    for pattern in (PREMIERE_PAIR, POSSESSIVE_PREMIERE_PAIR, MI_QUOTED_PAIR, HEAR_QUOTED_PAIR, ANNOUNCE_QUOTED_PAIR, IT_SINGLE_PAIR, PAIR):
         for match in pattern.finditer(text or ''):
             parsed = valid_pair(match.group('artist'), match.group('title'))
             if parsed:
@@ -661,7 +804,7 @@ def valid_pair(artist, title):
         return None
     if re.search(
         r'\b(announces?|interview|festival|\bfest\b|pre-?order|vinyl variant|dettagli dell|'
-        r'special|beitrag|artikel|premiere des|premiere der|tour returns|'
+        r'special|beitrag|artikel|premieres?|tour returns|'
         r'went super|most exciting|thanked for)\b',
         artist,
         re.I,
@@ -734,10 +877,14 @@ def score_candidate(item):
     if 'premiere' in item_types and not (rating and rating >= 0.7):
         premiere_bonus = 12 if len(sources) >= 2 else 10
     if premiere_only:
-        # Give discovery fills a floor inside the soft cap.
-        premiere_bonus = max(premiere_bonus, 15)
+        # Give discovery fills a floor inside the soft cap; each extra outlet
+        # running the same premiere is a signal the song is worth hearing.
+        extra_outlets = min(2, len(sources) - 1)
+        premiere_bonus = max(premiere_bonus, 15) + EXTRA_PREMIERE_SOURCE_BONUS * extra_outlets
     subgenre_pts = 5 if item.get('subgenre') != 'metal' else 3
-    total = rating_pts + quality_auth + consensus_pts + recency + premiere_bonus + subgenre_pts
+    # Artists already on the playlist earned their place; follow their new music.
+    known_pts = KNOWN_ARTIST_BONUS if item.get('known_artist') else 0
+    total = rating_pts + quality_auth + consensus_pts + recency + premiere_bonus + subgenre_pts + known_pts
     total = min(100, total)
 
     if item.get('sentiment') == 'negative':
@@ -757,36 +904,67 @@ def score_candidate(item):
         'recency': recency,
         'premiere_bonus': premiere_bonus,
         'subgenre': subgenre_pts,
+        'known_artist': known_pts,
     }
 
 
-def candidates(items):
+def _llm_found(article, item_type):
+    """Candidate tuples from Claude's per-release extraction."""
+    found = []
+    from_review = item_type in {'review', 'list'}
+    for release in article.get('llm_releases') or []:
+        if release.get('sentiment') == 'negative':
+            continue
+        album = release['album']
+        track = release['tracks'][0] if release['tracks'] else album
+        valid = valid_pair(release['artist'], track) if track else None
+        if not valid:
+            continue
+        artist = valid[0]
+        highlight = release['tracks'][0] if from_review and release['tracks'] else ''
+        found.append((artist, track, album, from_review, highlight, release))
+    return found
+
+
+def _regex_found(article, item_type):
+    found = []
+    highlight = (article.get('highlight') or '').strip()
+    review_highlight = highlight if item_type in {'review', 'list'} else ''
+    if item_type in {'review', 'list'}:
+        review_album = extract_review_album(article.get('title', ''))
+        if review_album:
+            artist, album = review_album
+            track_title = highlight if highlight and highlight.lower() != album.lower() else album
+            found.append((artist, track_title, album, True, review_highlight, None))
+        elif highlight:
+            # Highlight without clean album parse — try artist from headline pair.
+            for artist, title in extract_pairs(article.get('title', '')):
+                found.append((artist, highlight, title, True, review_highlight, None))
+                break
+    for artist, title in extract_pairs(article.get('title', '')):
+        album = title if is_album(article['text'], article['title']) else ''
+        found.append((artist, title, album, False, review_highlight, None))
+    for artist, title in extract_pairs((article.get('text') or '')[:500]):
+        found.append((artist, title, '', False, review_highlight, None))
+    return found
+
+
+def candidates(items, known_artists=None):
+    known_artists = known_artists or set()
     grouped = {}
     for article in items:
         if article.get('sentiment') == 'negative':
             continue
+        if article.get('llm_not_metal') and article.get('source') not in METAL_NATIVE_SOURCES:
+            continue
         item_type = article.get('item_type') or 'news'
         role = article.get('role') or 'discovery'
-        found = []
-        if item_type in {'review', 'list'}:
-            review_album = extract_review_album(article.get('title', ''))
-            highlight = (article.get('highlight') or '').strip()
-            if review_album:
-                artist, album = review_album
-                track_title = highlight if highlight and highlight.lower() != album.lower() else album
-                found.append((artist, track_title, album, True))
-            elif highlight:
-                # Highlight without clean album parse — try artist from headline pair.
-                for artist, title in extract_pairs(article.get('title', '')):
-                    found.append((artist, highlight, title, True))
-                    break
-        for artist, title in extract_pairs(article.get('title', '')):
-            found.append((artist, title, title if is_album(article['text'], article['title']) else '', False))
-        for artist, title in extract_pairs((article.get('text') or '')[:500]):
-            found.append((artist, title, '', False))
+        # Claude's reading wins when present; regex covers runs without an API key
+        # and articles it found nothing in.
+        found = _llm_found(article, item_type) or _regex_found(article, item_type)
 
-        for artist, title, album, from_review in found:
-            key = (artist.lower(), title.lower())
+        for artist, title, album, from_review, highlight, release in found:
+            key = (normalize_name(artist), normalize_name(title))
             if key not in grouped:
                 grouped[key] = {
                     'artist': artist,
@@ -810,6 +988,7 @@ def candidates(items):
                     'recent': False,
                     'subgenre': detect_subgenre(article['text']),
                     'summary': article['title'],
+                    'known_artist': normalize_name(artist) in known_artists,
                 }
             entry = grouped[key]
             entry['sources'].add(article['source'])
@@ -826,12 +1005,19 @@ def candidates(items):
             entry['recent'] = entry['recent'] or published_at >= LOOKBACK
             if item_type in {'review', 'list'}:
                 entry['review_sources'].add(article['source'])
-                if article.get('rating') is not None:
-                    entry['ratings'].append(article['rating'])
-                if article.get('rating_label'):
-                    entry['rating_labels'].append(article['rating_label'])
-                if article.get('highlight'):
-                    entry['highlights'].add(article['highlight'])
+                rating = article.get('rating')
+                rating_label = article.get('rating_label')
+                if release is not None and release is not article['llm_releases'][0]:
+                    # Lists carry one score per release; the first one is already
+                    # merged into the article rating by enrich_reviews.
+                    rating = calibrated_rating(article['source'], release.get('rating'))
+                    rating_label = release.get('rating_label') or None
+                if rating is not None:
+                    entry['ratings'].append(rating)
+                if rating_label:
+                    entry['rating_labels'].append(rating_label)
+                if highlight:
+                    entry['highlights'].add(highlight)
             if from_review and album:
                 entry['album'] = entry['album'] or album
                 entry['kind'] = 'album'
@@ -864,7 +1050,15 @@ def candidates(items):
             continue
         ranked.append(item)
     ranked.sort(key=lambda item: item['score'], reverse=True)
-    return ranked[:CANDIDATE_POOL]
+    # A review's album entry and highlight entry can converge on the same song.
+    unique, seen = [], set()
+    for item in ranked:
+        key = (normalize_name(item['artist']), normalize_name(item['title']))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique[:CANDIDATE_POOL]
 
 
 def diagnostic_mode():
@@ -1031,48 +1225,124 @@ def _search(access, query, kind):
     raise _spotify_error('search', last_error)
 
 
-def _spotify_match_ok(track, artist, title):
+_FOLD = str.maketrans({'ø': 'o', 'æ': 'ae', 'œ': 'oe', 'ß': 'ss', 'đ': 'd', 'ł': 'l', 'þ': 'th', 'ð': 'd'})
+_VERSION_SUFFIX = (
+    r'feat|ft|with|remaster(?:ed)?|edit|version|single|radio|bonus|live|demo|'
+    r'instrumental|re-?recorded|mix|mono|stereo'
+)
+
+
+def normalize_name(value):
+    """Fold case, accents, punctuation and version suffixes for name matching."""
+    text = unicodedata.normalize('NFKD', str(value or ''))
+    text = ''.join(ch for ch in text if not unicodedata.combining(ch)).lower().translate(_FOLD)
+    text = re.sub(rf'\s*[(\[][^)\]]*\b(?:{_VERSION_SUFFIX})\b[^)\]]*[)\]]', '', text)
+    text = re.sub(rf'\s+[-–—]\s+[^-–—]*\b(?:{_VERSION_SUFFIX})\b.*$', '', text)
+    text = re.sub(r'\s(?:feat|ft)\.?\s.*$', '', text)
+    text = text.replace('&', ' and ')
+    text = re.sub(r'\bpt\b\.?', 'part', text)
+    text = re.sub(r'[^\w\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return re.sub(r'^the\s+', '', text)
+
+
+def name_similarity(left, right):
+    left, right = normalize_name(left), normalize_name(right)
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _title_similarity(wanted, found):
+    score = name_similarity(wanted, found)
+    wanted_n, found_n = normalize_name(wanted), normalize_name(found)
+    # "Obsidian Crown" vs "Obsidian Crown Part I" style extensions.
+    if wanted_n and re.search(rf'\b{re.escape(wanted_n)}\b', found_n) and len(wanted_n) >= 0.6 * len(found_n):
+        score = max(score, TITLE_MATCH_MIN)
+    return score
+
+
+def _match_score(track, artist, title):
+    """0 when the Spotify track is not the press pick, else a closeness score."""
     if not track or not track.get('id'):
-        return False
-    names = ' '.join(a.get('name') or '' for a in track.get('artists') or [])
+        return 0.0
+    artists = [a.get('name') or '' for a in track.get('artists') or []]
+    names = ' '.join(artists)
     track_name = track.get('name') or ''
     album_name = ((track.get('album') or {}).get('name') or '')
-    blob = f'{names} {track_name} {album_name}'
-    if NON_METAL_SPOTIFY.search(blob):
-        return False
-    if NON_METAL_ARTISTS.search((names.split(',')[0] if names else artist).strip()):
-        return False
-    if artist.lower() not in names.lower():
-        return False
-    if title.lower() not in track_name.lower():
-        return False
-    return True
+    if NON_METAL_SPOTIFY.search(f'{names} {track_name} {album_name}'):
+        return 0.0
+    if NON_METAL_ARTISTS.search((artists[0] if artists else artist).strip()):
+        return 0.0
+    artist_score = max((name_similarity(artist, name) for name in artists), default=0.0)
+    if artist_score < ARTIST_MATCH_MIN:
+        return 0.0
+    title_score = _title_similarity(title, track_name)
+    if title_score < TITLE_MATCH_MIN:
+        return 0.0
+    # Live cuts, demos and remasters only when the press asked for that version.
+    if UNWANTED_VERSION.search(f'{track_name} {album_name}') and not UNWANTED_VERSION.search(title):
+        return 0.0
+    album_type = ((track.get('album') or {}).get('album_type') or '')
+    type_bonus = 0.02 if album_type in {'album', 'single'} else 0.0
+    return artist_score + title_score + type_bonus
+
+
+def _spotify_match_ok(track, artist, title):
+    return _match_score(track, artist, title) > 0
+
+
+def _query_term(value):
+    return re.sub(r'["“”:]', ' ', str(value or '')).strip()
 
 
 def search(access, artist, title):
-    payload = _search(access, f'track:{title} artist:{artist}', 'track')
-    tracks = payload.get('tracks', {}).get('items', []) or []
-    for track in tracks:
-        if _spotify_match_ok(track, artist, title):
-            return track
+    artist_q, title_q = _query_term(artist), _query_term(title)
+    # Field filters first; the bare query catches titles the filter syntax trips on.
+    queries = [f'track:"{title_q}" artist:"{artist_q}"', f'{artist_q} {title_q}']
+    seen = set()
+    for query in queries:
+        payload = _search(access, query, 'track')
+        tracks = payload.get('tracks', {}).get('items', []) or []
+        scored = []
+        for track in tracks:
+            if not track or track.get('id') in seen:
+                continue
+            seen.add(track.get('id'))
+            score = _match_score(track, artist, title)
+            if score > 0:
+                scored.append((score, track.get('popularity') or 0, track))
+        if scored:
+            scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
+            return scored[0][2]
     # Never fall back to an unmatched first hit (spa/pop false positives).
     return None
 
 
-def album_named_track(access, artist, album, track_name):
-    payload = _search(access, f'album:{album} artist:{artist}', 'album')
-    albums = payload.get('albums', {}).get('items', []) or []
-    album_obj = None
-    for item in albums:
-        names = ' '.join(a['name'] for a in item.get('artists', []))
-        album_name = item.get('name') or ''
-        if NON_METAL_SPOTIFY.search(f'{names} {album_name}'):
+def _find_album(access, artist, album):
+    payload = _search(access, f'album:"{_query_term(album)}" artist:"{_query_term(artist)}"', 'album')
+    best, best_score = None, 0.0
+    for item in payload.get('albums', {}).get('items', []) or []:
+        if not item or not item.get('id'):
             continue
-        if artist.lower() in names.lower() and album.lower() in album_name.lower():
-            album_obj = item
-            break
-    if not album_obj or not album_obj.get('id'):
-        return None
+        names = [a.get('name') or '' for a in item.get('artists', [])]
+        album_name = item.get('name') or ''
+        if NON_METAL_SPOTIFY.search(f'{" ".join(names)} {album_name}'):
+            continue
+        artist_score = max((name_similarity(artist, name) for name in names), default=0.0)
+        album_score = _title_similarity(album, album_name)
+        if artist_score < ARTIST_MATCH_MIN or album_score < TITLE_MATCH_MIN:
+            continue
+        # Prefer the full-length over a same-named single or EP.
+        score = artist_score + album_score + (0.05 if item.get('album_type') == 'album' else 0.0)
+        if score > best_score:
+            best, best_score = item, score
+    return best
+
+
+def _album_tracks(access, album_obj):
     response = requests.get(
         f'{SPOTIFY_API}/albums/{album_obj["id"]}/tracks',
         headers=_auth_headers(access),
@@ -1080,23 +1350,177 @@ def album_named_track(access, artist, album, track_name):
         timeout=30,
     )
     if not response.ok:
-        return None
-    wanted = (track_name or '').lower()
+        return []
+    tracks = []
     for item in response.json().get('items') or []:
         if not item or not item.get('id'):
             continue
-        name = (item.get('name') or '').lower()
-        if wanted and wanted in name:
-            item = dict(item)
-            item['album'] = {'name': album_obj.get('name', album), 'id': album_obj.get('id')}
-            if not item.get('artists'):
-                item['artists'] = album_obj.get('artists') or [{'name': artist}]
-            if _spotify_match_ok(item, artist, track_name or album):
-                return item
+        item = dict(item)
+        item['album'] = {
+            'name': album_obj.get('name') or '',
+            'id': album_obj.get('id'),
+            'album_type': album_obj.get('album_type') or 'album',
+            'release_date': album_obj.get('release_date') or '',
+        }
+        if not item.get('artists'):
+            item['artists'] = album_obj.get('artists') or []
+        tracks.append(item)
+    return tracks
+
+
+def album_named_track(access, artist, album, track_name):
+    album_obj = _find_album(access, artist, album)
+    if not album_obj:
+        return None
+    for item in _album_tracks(access, album_obj):
+        if _spotify_match_ok(item, artist, track_name or album):
+            return item
     return None
 
 
-def resolve_candidate(access, candidate):
+def _prerelease_single_names(access, artist, album_obj):
+    """Normalized titles of the singles released ahead of the album: the label's focus tracks."""
+    payload = _search(access, f'artist:"{_query_term(artist)}"', 'album')
+    album_date = album_obj.get('release_date') or ''
+    names = set()
+    for item in payload.get('albums', {}).get('items', []) or []:
+        if not item or item.get('album_type') != 'single':
+            continue
+        if max((name_similarity(artist, a.get('name')) for a in item.get('artists') or []), default=0.0) < ARTIST_MATCH_MIN:
+            continue
+        release = item.get('release_date') or ''
+        if album_date and release and len(release) == len(album_date) and release > album_date:
+            continue
+        names.add(normalize_name(item.get('name')))
+    return names
+
+
+def _playable_album_track(track, album):
+    name = track.get('name') or ''
+    if (track.get('duration_ms') or 0) < MIN_TRACK_MS:
+        return False
+    if FILLER_TRACK.search(name) and not FILLER_TRACK.search(album or ''):
+        return False
+    return not UNWANTED_VERSION.search(name)
+
+
+def album_focus_track(access, artist, album):
+    """Pick one strong track from a reviewed album that names no standout."""
+    album_obj = _find_album(access, artist, album)
+    if not album_obj:
+        return None
+    playable = [
+        track for track in _album_tracks(access, album_obj)
+        if _playable_album_track(track, album)
+        and not NON_METAL_SPOTIFY.search(track.get('name') or '')
+    ]
+    if not playable:
+        return None
+    singles = _prerelease_single_names(access, artist, album_obj)
+    for track in playable:
+        if normalize_name(track.get('name')) in singles:
+            return track
+    for track in playable:
+        if name_similarity(track.get('name'), album) >= ARTIST_MATCH_MIN:
+            return track
+    # Openers past the intro are usually where a record makes its case.
+    for track in playable:
+        if (track.get('duration_ms') or 0) >= SOLID_TRACK_MS:
+            return track
+    return playable[0]
+
+
+_GENRE_VERDICTS = {}
+_last_musicbrainz_call = 0.0
+
+
+def genre_verdict(weights, min_total):
+    """'metal', 'adjacent', 'not_metal' or 'unknown' from genre/tag name -> weight.
+
+    'adjacent' means heavy tags exist but are outvoted (A Perfect Circle, Oasis's
+    stray shoegaze tag): trusted only when metal press vouches for the band.
+    """
+    total = sum(weight for weight in weights.values() if weight > 0)
+    if total <= 0:
+        return 'unknown'
+    metal = sum(weight for name, weight in weights.items() if weight > 0 and METAL_GENRE.search(name))
+    if metal / total >= 0.2:
+        return 'metal'
+    if total < min_total:
+        return 'unknown'
+    return 'adjacent' if any(METAL_GENRE.search(name) for name in weights) else 'not_metal'
+
+
+def _spotify_genres(access, artist_id):
+    if not artist_id:
+        return {}
+    try:
+        response = requests.get(
+            f'{SPOTIFY_API}/artists/{artist_id}',
+            headers=_auth_headers(access),
+            timeout=20,
+        )
+    except requests.RequestException:
+        return {}
+    if not response.ok:
+        return {}
+    return {genre: 1 for genre in response.json().get('genres') or []}
+
+
+def musicbrainz_tag_sets(artist):
+    """Tag weights for every MusicBrainz artist with exactly this name."""
+    global _last_musicbrainz_call
+    # MusicBrainz allows one request per second per client.
+    wait = 1.1 - (time.monotonic() - _last_musicbrainz_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_musicbrainz_call = time.monotonic()
+    try:
+        response = requests.get(
+            MUSICBRAINZ_API,
+            params={'query': f'artist:"{_query_term(artist)}"', 'fmt': 'json', 'limit': 5},
+            headers={**HTML_HEADERS, 'Accept': 'application/json'},
+            timeout=20,
+        )
+    except requests.RequestException:
+        return []
+    if not response.ok:
+        return []
+    wanted = normalize_name(artist)
+    sets = []
+    for item in response.json().get('artists') or []:
+        if normalize_name(item.get('name')) != wanted:
+            continue
+        tags = {
+            tag.get('name') or '': tag.get('count') or 0
+            for tag in item.get('tags') or []
+        }
+        if tags:
+            sets.append(tags)
+    return sets
+
+
+def artist_genre_verdict(access, track):
+    artists = track.get('artists') or []
+    if not artists:
+        return 'unknown'
+    name = artists[0].get('name') or ''
+    key = normalize_name(name)
+    if key in _GENRE_VERDICTS:
+        return _GENRE_VERDICTS[key]
+    verdict = genre_verdict(_spotify_genres(access, artists[0].get('id')), min_total=2)
+    if verdict == 'unknown':
+        # Several artists can share a name: one metal namesake is enough to pass.
+        verdicts = [genre_verdict(tags, min_total=3) for tags in musicbrainz_tag_sets(name)]
+        for candidate_verdict in ('metal', 'unknown', 'adjacent', 'not_metal'):
+            if candidate_verdict in verdicts:
+                verdict = candidate_verdict
+                break
+    _GENRE_VERDICTS[key] = verdict
+    return verdict
+
+
+def _resolve_tracks(access, candidate):
     artist = candidate['artist']
     title = candidate['title']
     album = candidate.get('album') or ''
@@ -1105,15 +1529,19 @@ def resolve_candidate(access, candidate):
 
     # Review albums: highlight-first, never spray first N tracks.
     if candidate.get('primary_type') == 'review' or candidate.get('review_sources'):
-        if highlight:
+        named = highlight and normalize_name(highlight) != normalize_name(album)
+        if named:
             track = search(access, artist, highlight)
             if track:
                 return [track]
-        if album and highlight and highlight.lower() != album.lower():
-            track = album_named_track(access, artist, album, highlight)
+            if album:
+                track = album_named_track(access, artist, album, highlight)
+                if track:
+                    return [track]
+        if album:
+            track = album_focus_track(access, artist, album)
             if track:
                 return [track]
-        if album:
             track = search(access, artist, album)
             if track:
                 return [track]
@@ -1121,6 +1549,19 @@ def resolve_candidate(access, candidate):
 
     track = search(access, artist, title)
     return [track] if track else []
+
+
+def resolve_candidate(access, candidate):
+    tracks = _resolve_tracks(access, candidate)
+    if not tracks or (candidate.get('sources') or set()) == {'Editorial'}:
+        return tracks
+    verdict = artist_genre_verdict(access, tracks[0])
+    vouched = bool((candidate.get('sources') or set()) & METAL_NATIVE_SOURCES)
+    if verdict == 'not_metal' or (verdict == 'adjacent' and not vouched):
+        print(f"Genre gate rejected: {candidate['artist']} — {candidate['title']}")
+        candidate['genre_rejected'] = True
+        return []
+    return tracks
 
 
 def existing(access, playlist):
@@ -1296,10 +1737,16 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
     single_discovery = 0
     duplicates_rejected = 0
 
+    resolved_cache = {}
+
     def _lookup(candidate):
-        if lookup.__code__.co_argcount == 1:
-            return lookup(candidate)
-        return lookup(candidate['artist'], candidate['title'])
+        key = id(candidate)
+        if key not in resolved_cache:
+            if lookup.__code__.co_argcount == 1:
+                resolved_cache[key] = lookup(candidate)
+            else:
+                resolved_cache[key] = lookup(candidate['artist'], candidate['title'])
+        return resolved_cache[key]
 
     def _is_single_discovery(candidate):
         sources = candidate.get('sources') or set()
@@ -1317,11 +1764,30 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
             return MAX_PER_ALBUM_TOP
         return MAX_PER_ALBUM
 
-    def consider(candidate):
+    def _held_back(candidate):
+        """Fill-only picks: weak premieres/news and lone lukewarm reviews."""
+        if not candidate.get('source_scores'):
+            return False
+        if not candidate.get('review_sources'):
+            return (
+                candidate.get('primary_type') in {'premiere', 'news'}
+                and candidate.get('score', 0) < MIN_PREMIERE_SCORE
+            )
+        rating = candidate.get('best_rating')
+        return (
+            rating is not None
+            and rating < WEAK_REVIEW_RATING
+            and len(candidate['review_sources']) == 1
+            and (candidate.get('sources') or set()) != {'Editorial'}
+        )
+
+    def consider(candidate, top_up=False):
         nonlocal duplicates_rejected, pitchfork_only, single_discovery
         if len(chosen) >= MAX_TRACKS:
             return False
         if candidate.get('source_scores') and candidate.get('score', 0) < MIN_SCORE:
+            return False
+        if not top_up and _held_back(candidate):
             return False
         sources = candidate.get('sources') or set()
         for source in sources:
@@ -1410,10 +1876,19 @@ def select_tracks(ranked, known_ids, lookup, catalog=None):
         ),
         reverse=True,
     )
+    leftovers = []
     for candidate in remaining:
         if len(chosen) >= MAX_TRACKS:
             break
-        consider(candidate)
+        if not consider(candidate):
+            leftovers.append(candidate)
+    # Thin weeks: held-back picks may top the playlist up to MIN_TRACKS, never past it.
+    for candidate in leftovers:
+        if len(chosen) >= MIN_TRACKS:
+            break
+        # Ones already looked up failed for good; only retry those held back unseen.
+        if _held_back(candidate) and id(candidate) not in resolved_cache:
+            consider(candidate, top_up=True)
     catalog['ids'] = known
     return chosen, uris, known, {
         'duplicates_rejected': duplicates_rejected,
@@ -1432,6 +1907,7 @@ def write_report(chosen, uris, stats):
         f'DUPLICATES REJECTED: {stats.get("duplicates_rejected", 0)}',
         f'SOURCES CONSULTED: {", ".join(stats.get("sources_consulted") or []) or "none"}',
         f'EDITORIAL PICKS: {stats.get("editorial_count", 0)}',
+        f'LLM EXTRACTIONS: {stats.get("llm_calls", 0)} ({stats.get("llm_failures", 0)} failed)',
         '',
         '## NEW TRACKS ADDED',
         '',
@@ -1463,6 +1939,11 @@ def write_report(chosen, uris, stats):
             label = f'{artist} — {title}' if title else artist
             lines.append(f'- {label}: {reason}')
         lines.append('')
+    genre_rejected = stats.get('genre_rejected') or []
+    if genre_rejected:
+        lines.extend(['## REJECTED BY GENRE GATE', ''])
+        lines.extend(f'- {label}' for label in genre_rejected[:12])
+        lines.append('')
     rejected = stats.get('rejected_negatives') or []
     if rejected:
         lines.extend(['## REJECTED NEGATIVE REVIEWS', ''])
@@ -1480,7 +1961,10 @@ def main():
     picks = load_editorial_picks()
     editorial = editorial_candidates(picks)
     items, consulted = articles()
-    items, rejected_negatives = enrich_reviews(items)
+    extractor = llm_extract.Extractor() if llm_extract.enabled() else None
+    if extractor:
+        print(f'LLM extraction enabled ({llm_extract.MODEL}, up to {extractor.max_calls} calls)')
+    items, rejected_negatives = enrich_reviews(items, extractor=extractor)
     access, granted_scope = _refresh_access_token()
     playlist = os.environ.get('SPOTIFY_PLAYLIST_ID', '')
     if not str(playlist).strip():
@@ -1492,7 +1976,8 @@ def main():
         return
     current = existing(access, playlist)
     catalog = catalog_from_items(current, history)
-    ranked = candidates(items)
+    known_artists = {normalize_name(artist) for artist, _title in catalog['pairs'] if artist}
+    ranked = candidates(items, known_artists)
     if editorial:
         editorial_keys = {
             (item['artist'].lower(), item['title'].lower())
@@ -1534,6 +2019,11 @@ def main():
         'rejected_negatives': rejected_negatives,
         'editorial_count': editorial_added,
         'editorial_excluded': (picks or {}).get('excluded') or [],
+        'genre_rejected': [
+            f"{item['artist']} — {item['title']}" for item in ranked if item.get('genre_rejected')
+        ],
+        'llm_calls': extractor.calls if extractor else 0,
+        'llm_failures': extractor.failures if extractor else 0,
     }
     write_report(chosen, uris, stats)
     print(f'Added tracks: {len(uris)}')

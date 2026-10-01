@@ -127,6 +127,67 @@ SOURCES = {
         'role': 'regional',
         'feeds': ['https://metallus.it/feed'],
     },
+    'Metal Hammer Italia': {
+        'tier': 1,
+        'authority': 7,
+        'region': 'IT',
+        'kind': 'specialist',
+        'role': 'regional',
+        'feeds': ['https://www.metalhammer.it/feed/'],
+    },
+    # Specialist review-heavy outlets: more reviews means more critical consensus,
+    # so premieres only need to fill leftover slots.
+    'Invisible Oranges': {
+        'tier': 1,
+        'authority': 9,
+        'region': 'US',
+        'kind': 'specialist',
+        'role': 'quality',
+        'feeds': ['https://www.invisibleoranges.com/feed/'],
+    },
+    'No Clean Singing': {
+        'tier': 1,
+        'authority': 8,
+        'region': 'US',
+        'kind': 'specialist',
+        'role': 'quality',
+        'feeds': ['https://www.nocleansinging.com/feed/'],
+    },
+    'Heavy Blog Is Heavy': {
+        'tier': 1,
+        'authority': 8,
+        'region': 'US',
+        'kind': 'specialist',
+        'role': 'quality',
+        'feeds': ['https://heavyblogisheavy.com/feed/'],
+    },
+    'Metal Storm': {
+        'tier': 1,
+        'authority': 8,
+        'region': 'EU',
+        'kind': 'specialist',
+        'role': 'quality',
+        # Reviews-only feed: every entry is an "Artist - Album" review.
+        'review_feed': True,
+        'feeds': ['https://metalstorm.net/rss/reviews.xml'],
+    },
+    'Toilet ov Hell': {
+        'tier': 1,
+        'authority': 7,
+        'region': 'US',
+        'kind': 'specialist',
+        'role': 'discovery',
+        'feeds': ['https://www.toiletovhell.com/feed/'],
+    },
+    'Bandcamp Daily': {
+        'tier': 1,
+        'authority': 9,
+        'region': 'US',
+        'kind': 'editorial',
+        'role': 'quality',
+        # Generalist feed: only metal-tagged posts (e.g. "The Best Metal on Bandcamp") pass.
+        'feeds': ['https://daily.bandcamp.com/feed'],
+    },
 }
 
 SUBGENRES = (
@@ -164,4 +225,11 @@ METAL_NATIVE_SOURCES = {
     'Loudwire',
     'Metalitalia',
     'Metallus',
+    'Metal Hammer Italia',
+    'Invisible Oranges',
+    'No Clean Singing',
+    'Heavy Blog Is Heavy',
+    'Metal Storm',
+    'Toilet ov Hell',
 }
+REVIEW_FEED_SOURCES = {name for name, cfg in SOURCES.items() if cfg.get('review_feed')}

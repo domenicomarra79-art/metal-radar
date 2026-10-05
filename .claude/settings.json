@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "claude-code-playground-mods": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-code-playground",
+        "path": "claude-code/mods/.claude-plugin/marketplace.json"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "token-weather@claude-code-playground-mods": true
+  }
+}

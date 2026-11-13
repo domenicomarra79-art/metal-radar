@@ -1,98 +1,95 @@
-# Metal Radar — 2026-11-06 04:18 CET
+# Metal Radar — 2026-11-13 04:17 CET
 
 Playlist: METAL RADAR
 NEW TRACKS THIS WEEK: 8
-TOTAL PLAYLIST TRACKS: 129
-DUPLICATES REJECTED: 4
+TOTAL PLAYLIST TRACKS: 140
+DUPLICATES REJECTED: 3
 SOURCES CONSULTED: Pitchfork, Angry Metal Guy, Decibel, Revolver, Metal Injection, Loudwire, Stereogum, Consequence, BrooklynVegan, Kerrang, Louder, The Quietus, Metalitalia, Metallus, Metal Hammer Italia, Invisible Oranges, No Clean Singing, Heavy Blog Is Heavy, Metal Storm, Toilet ov Hell, Bandcamp Daily
 EDITORIAL PICKS: 0
 LLM EXTRACTIONS: 0 (0 failed)
 
 ## NEW TRACKS ADDED
 
-1. **Konvent — Exorcise**
-   Album: Firesky
-   Type: review
-   Subgenre: metal
-   Score: 73
-   Rating: AMG 4.5/5.0
-   Body read: true
-   Why: AMG 4.5/5.0 review highlight via Angry Metal Guy
-   Sources: Angry Metal Guy
-
-2. **Mental Cruelty — The Serpent Of Midgard**
-   Album: The Serpent Of Midgard
-   Type: review
-   Subgenre: deathcore
-   Score: 71
-   Rating: AMG 4.0/5.0
-   Body read: true
-   Why: AMG 4.0/5.0 review highlight via Angry Metal Guy
-   Sources: Angry Metal Guy
-
-3. **Hyperion — Nefarious Sacrament of the Immorals**
-   Album: Elysia
-   Type: review
-   Subgenre: black metal
-   Score: 71
-   Rating: AMG 4.0/5.0
-   Body read: true
-   Why: AMG 4.0/5.0 review highlight via Angry Metal Guy
-   Sources: Angry Metal Guy
-
-4. **Dungeon Serpent — Rainland's Elegy (The Lamentations of the Shadowkingdoms)**
-   Album: Lamentations of the Shadowkingdoms
+1. **The Duskfall — Entomb My Shadow**
+   Album: The Everlasting Shadows
    Type: review
    Subgenre: death metal
-   Score: 59
+   Score: 71
+   Rating: AMG 4.0/5.0
+   Body read: true
+   Why: AMG 4.0/5.0 review highlight via Angry Metal Guy
+   Sources: Angry Metal Guy
+
+2. **WraithStorm — Automaton**
+   Album: Revenant
+   Type: review
+   Subgenre: death metal
+   Score: 64
    Rating: qualitative positive
    Body read: true
-   Why: qualitative positive review highlight via Toilet ov Hell
-   Sources: Toilet ov Hell
+   Why: qualitative positive review highlight via Angry Metal Guy
+   Sources: Angry Metal Guy
 
-5. **Hirax — Vigilante**
-   Album: Vigilante
+3. **Night Gaunt — Of Clouds and Gleam**
+   Album: Rupture
+   Type: review
+   Subgenre: sludge
+   Score: 63
+   Rating: AMG 3.0/5.0
+   Body read: true
+   Why: AMG 3.0/5.0 review highlight via Angry Metal Guy
+   Sources: Angry Metal Guy
+
+4. **TesseracT — Crucible**
+   Album: Crucible
    Type: premiere
-   Subgenre: thrash metal
-   Score: 54
+   Subgenre: metal
+   Score: 55
    Rating: n/a
    Body read: true
-   Why: premiere fill via Decibel, Metalitalia
-   Sources: Decibel, Metalitalia
+   Why: premiere fill via Consequence, Metal Injection, Metalitalia
+   Sources: Consequence, Metal Injection, Metalitalia
 
-6. **Hatebreed — Decisions Become Destinies**
-   Album: Decisions Become Destinies
+5. **Alexisonfire — Push the River**
+   Album: Push the River
+   Type: news
+   Subgenre: metal
+   Score: 48
+   Rating: n/a
+   Body read: true
+   Why: Score 48; news via Consequence, Metalitalia
+   Sources: Consequence, Metalitalia
+
+6. **Sarcosuchus — De-Extinction**
+   Album: De-Extinction
    Type: premiere
+   Subgenre: death metal
+   Score: 44
+   Rating: n/a
+   Body read: true
+   Why: premiere fill via Decibel
+   Sources: Decibel
+
+7. **Maceration — Mercy to the Miserable**
+   Album: Mercy to the Miserable
+   Type: news
    Subgenre: metal
    Score: 44
    Rating: n/a
    Body read: true
-   Why: premiere fill via Metalitalia
+   Why: Score 44; news via Metalitalia
    Sources: Metalitalia
 
-7. **Hannes Grossmann — Worlds Beyond The Sun**
-   Album: Worlds Beyond The Sun
-   Type: news
-   Subgenre: death metal
-   Score: 42
-   Rating: n/a
-   Body read: true
-   Why: Score 42; news via Invisible Oranges
-   Sources: Invisible Oranges
-
-8. **Maceration — Lycanthropic Carnage**
-   Album: Lycanthropic Carnage
+8. **MOTHS — Path Of Existence**
+   Album: Path Of Existence
    Type: premiere
-   Subgenre: death metal
+   Subgenre: metal
    Score: 42
    Rating: n/a
    Body read: true
-   Why: premiere fill via No Clean Singing
-   Sources: No Clean Singing
+   Why: premiere fill via Decibel
+   Sources: Decibel
 
 ## REJECTED NEGATIVE REVIEWS
 
-- After Infintity – Beyond Eternity Review (Angry Metal Guy; AMG 2.0/5.0)
-- Ex-Killswitch Engage bandmates Howard Jones and Adam D's Burn Eternal release first single Wounds I’ve Made, announce debut album (Louder; qualitative negative)
-- Angel – Recensione: Angel (Metallus; qualitative negative)
-- Great Lakes Dungeon Siege 2026 Recap (Invisible Oranges; qualitative negative)
+- King Gizzard & the Lizard Wizard Announce New Album Entropy, Two North American Tours (Pitchfork; qualitative negative)
